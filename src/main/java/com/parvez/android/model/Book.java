@@ -1,0 +1,100 @@
+package com.parvez.android.model;
+
+import jakarta.persistence.*;
+
+@Entity
+@Table(
+        name = "books",
+        uniqueConstraints = {
+                @UniqueConstraint(
+                        name = "uk_books_isbn",
+                        columnNames = "isbn"
+                )
+        }
+)
+public class Book {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "isbn", nullable = false, unique = true, length = 20)
+    private String isbn;
+
+    @Column(nullable = false, length = 255)
+    private String title;
+
+    @Column(nullable = false, length = 255)
+    private String author;
+
+    @Column(name = "publication_date", nullable = false, length = 20)
+    private String publishedDate;
+
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
+    @Column(nullable = false, columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private boolean completed;
+
+    public Book() {
+    }
+
+    public Book(String isbn, String title, String author, String publishedDate, String description) {
+        this.isbn = isbn;
+        this.title = title;
+        this.author = author;
+        this.publishedDate = publishedDate;
+        this.description = description;
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public String getIsbn() {
+        return isbn;
+    }
+
+    public void setIsbn(String isbn) {
+        this.isbn = isbn;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public String getAuthor() {
+        return author;
+    }
+
+    public void setAuthor(String author) {
+        this.author = author;
+    }
+
+    public String getPublishedDate() {
+        return publishedDate;
+    }
+
+    public void setPublishedDate(String publishedDate) {
+        this.publishedDate = publishedDate;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public boolean isCompleted() {
+        return completed;
+    }
+
+    public void setCompleted(boolean completed) {
+        this.completed = completed;
+    }
+}

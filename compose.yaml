@@ -1,0 +1,16 @@
+services:
+  grafana-lgtm:
+    image: 'grafana/otel-lgtm:latest'
+    ports:
+      - '3000:3000' # Grafana Web UI
+      - '4317:4317' # OTLP gRPC Receiver
+      - '4318:4318' # OTLP HTTP Receiver
+
+  postgres:
+    image: 'postgres:latest'
+    environment:
+      - 'POSTGRES_DB=android'
+      - 'POSTGRES_PASSWORD=admin'
+      - 'POSTGRES_USER=admin'
+    ports:
+      - '5432:5432'
