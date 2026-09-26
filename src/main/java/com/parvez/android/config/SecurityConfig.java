@@ -15,6 +15,13 @@ import java.util.List;
 @Configuration
 public class SecurityConfig {
 
+    private static final String[] SWAGGER_WHITELIST = {
+            "/v3/api-docs/**",
+            "/swagger-ui/**",
+            "/swagger-ui.html"
+    };
+
+
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         return http
@@ -24,8 +31,10 @@ public class SecurityConfig {
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .requestCache(cache -> cache.disable())
                 .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers(HttpMethod.GET, "/api/books").authenticated()
-                        .requestMatchers(HttpMethod.POST, "/api/books").authenticated()
+                        .requestMatchers(HttpMethod.GET, SWAGGER_WHITELIST).permitAll()
+
+                        // Require authentication for all endpoints under /api/books (including sub-paths)
+                        .requestMatchers("/api/books/**").authenticated()
                         .anyRequest().denyAll())
                 .formLogin(form -> form.disable())
                 .httpBasic(Customizer.withDefaults())
@@ -40,7 +49,7 @@ public class SecurityConfig {
         corsConfiguration.setAllowedHeaders(List.of("Authorization", "Cache-Control", "Content-Type"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/api/books", corsConfiguration);
+        source.registerCorsConfiguration("/**", corsConfiguration);
         return source;
     }
 

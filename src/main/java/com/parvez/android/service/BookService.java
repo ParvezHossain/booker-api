@@ -9,6 +9,7 @@ import com.parvez.android.repository.BookRepository;
 import jakarta.validation.Valid;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RequestBody;
 
 import java.util.List;
@@ -48,12 +49,20 @@ public class BookService {
         return bookMapper.toBookResponse(savedBook);
     }
 
-    public BookResponse getBookByISBN(@Valid String isbn) {
+    public BookResponse getBookByISBN(String isbn) {
         return bookRepository.findByIsbn(isbn);
     }
 
-    public List<BookResponse> getBooksByAuthor(@Valid String author){
-        return bookRepository.findAllByAuthor(author)
+    public List<BookResponse> getBooksByAuthor(String author) {
+        return bookRepository.findByAuthor(author);
+    }
+
+    public List<BookResponse> getBooksByTitle(String title) {
+        return bookRepository.findAllByTitle(title);
+    }
+
+    public List<BookResponse> getBooksByAuthorAndTitle(String author, String title) {
+        return bookRepository.findAllByAuthorAndTitle(author, title)
                 .stream()
                 .map(bookMapper::toBookResponse)
                 .toList();

@@ -9,10 +9,9 @@ import java.util.List;
 
 @Repository
 public interface BookRepository extends JpaRepository<Book, Long> {
-    List<BookResponse> findAllByAuthor(String author);
-    BookResponse findAllByTitle(String title);
-    List<BookResponse> findAllByAuthorAndTitle(String author, String title);
-    BookResponse findAllByTitleAndAuthor(String title, String author);
+    List<Book> findAllByAuthor(String author);
+    List<BookResponse> findAllByTitle(String title);
+    List<Book> findAllByAuthorAndTitle(String author, String title);
     List<BookResponse> findByAuthor(String author);
     BookResponse findByTitle(String title);
     BookResponse findByIsbn(String isbn);
