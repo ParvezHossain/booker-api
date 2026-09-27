@@ -7,8 +7,8 @@ import jakarta.persistence.*;
         name = "books",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uk_books_isbn",
-                        columnNames = "isbn"
+                        name = "uk_books_workspace_isbn",
+                        columnNames = {"workspace_id", "isbn"}
                 )
         }
 )
@@ -17,7 +17,13 @@ public class Book {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "isbn", nullable = false, unique = true, length = 20)
+    @Column(name = "workspace_id", nullable = false)
+    private java.util.UUID workspaceId;
+    public java.util.UUID getWorkspaceId() { return workspaceId; }
+    public void setWorkspaceId(java.util.UUID workspaceId) { this.workspaceId = workspaceId; }
+
+
+    @Column(name = "isbn", nullable = false, length = 20)
     private String isbn;
 
     @Column(nullable = false, length = 255)

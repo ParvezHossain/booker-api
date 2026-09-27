@@ -1,21 +1,15 @@
 package com.parvez.android.repository;
-
-import com.parvez.android.dto.BookResponse;
 import com.parvez.android.model.Book;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
-
 import java.util.List;
-
-@Repository
+import java.util.Optional;
+import java.util.UUID;
 public interface BookRepository extends JpaRepository<Book, Long> {
-    List<Book> findAllByAuthor(String author);
-    List<BookResponse> findAllByTitle(String title);
-    List<Book> findAllByAuthorAndTitle(String author, String title);
-    List<BookResponse> findByAuthor(String author);
-    BookResponse findByTitle(String title);
-    BookResponse findByIsbn(String isbn);
-    boolean existsByIsbn(String isbn);
-    boolean existsByTitle(String title);
-    boolean existsByIsbnAndIdNot(String isbn, Long id);
+    List<Book> findAllByWorkspaceId(UUID workspaceId);
+    List<Book> findAllByWorkspaceIdAndAuthor(UUID workspaceId, String author);
+    List<Book> findAllByWorkspaceIdAndTitle(UUID workspaceId, String title);
+    List<Book> findAllByWorkspaceIdAndAuthorAndTitle(UUID workspaceId, String author, String title);
+    Optional<Book> findByWorkspaceIdAndIsbn(UUID workspaceId, String isbn);
+    boolean existsByWorkspaceIdAndIsbn(UUID workspaceId, String isbn);
+    long countByWorkspaceId(UUID workspaceId);
 }

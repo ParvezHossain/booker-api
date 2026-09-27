@@ -19,14 +19,18 @@ import java.util.List;
 public class BookService {
     private final BookRepository bookRepository;
     private final BookMapper bookMapper;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
-    public BookService(BookRepository bookRepository, BookMapper bookMapper) {
+    public BookService(BookRepository bookRepository, BookMapper bookMapper, org.springframework.jdbc.core.JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
         this.bookRepository = bookRepository;
         this.bookMapper = bookMapper;
     }
 
+    private java.util.UUID workspace() { return com.parvez.android.saas.WorkspacePrincipal.currentWorkspace(); }
+
     public List<BookResponse> getBooks() {
-        return bookRepository.findAll()
+        return bookRepository.findAllByWorkspaceId(workspace())
                 .stream()
                 .map(bookMapper::toBookResponse)
                 .toList();
@@ -34,10 +38,15 @@ public class BookService {
 
     @Transactional
     public BookResponse createBook(@Valid BookRequest request) {
-        if (bookRepository.existsByIsbn(request.isbn())) {
+        if (bookRepository.existsByWorkspaceIdAndIsbn(workspace(), request.isbn())) {
             throw new BookAlreadyExistsException("Book already exists with isbn: " + request.isbn());
         }
+        int limit = jdbc.queryForObject("SELECT book_limit FROM workspaces WHERE id = ? FOR UPDATE", Integer.class, workspace());
+        if (bookRepository.countByWorkspaceId(workspace()) >= limit) {
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Workspace book limit reached");
+        }
         Book book = new Book();
+        book.setWorkspaceId(workspace());
         book.setIsbn(request.isbn());
         book.setTitle(request.title());
         book.setAuthor(request.author());
@@ -50,19 +59,20 @@ public class BookService {
     }
 
     public BookResponse getBookByISBN(String isbn) {
-        return bookRepository.findByIsbn(isbn);
+        return bookRepository.findByWorkspaceIdAndIsbn(workspace(), isbn).map(bookMapper::toBookResponse)
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Book not found"));
     }
 
     public List<BookResponse> getBooksByAuthor(String author) {
-        return bookRepository.findByAuthor(author);
+        return bookRepository.findAllByWorkspaceIdAndAuthor(workspace(), author).stream().map(bookMapper::toBookResponse).toList();
     }
 
     public List<BookResponse> getBooksByTitle(String title) {
-        return bookRepository.findAllByTitle(title);
+        return bookRepository.findAllByWorkspaceIdAndTitle(workspace(), title).stream().map(bookMapper::toBookResponse).toList();
     }
 
     public List<BookResponse> getBooksByAuthorAndTitle(String author, String title) {
-        return bookRepository.findAllByAuthorAndTitle(author, title)
+        return bookRepository.findAllByWorkspaceIdAndAuthorAndTitle(workspace(), author, title)
                 .stream()
                 .map(bookMapper::toBookResponse)
                 .toList();

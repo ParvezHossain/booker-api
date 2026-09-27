@@ -2,8 +2,8 @@
 
 Connect to `GET /api/books/events` with the same HTTP Basic Authorization header
 as the book API and `Accept: text/event-stream`. Use HTTPS in deployment.
-Every authenticated subscriber receives every new book. No frontend changes are
-included here.
+Each authenticated subscriber receives only books from their own workspace, including
+replayed events. Register credentials using `/api/auth/signup`.
 
 ```text
 id: 17
@@ -30,7 +30,7 @@ Angular needs a fetch-based SSE client capable of setting Authorization and
 Last-Event-ID; native browser EventSource cannot set arbitrary headers.
 Kotlin can use an SSE-capable HTTP client with the same headers. Never put
 credentials in the URL. CORS currently allows `http://localhost:4200`; configure
-the deployed Angular origin in SecurityConfig. GET/POST and Last-Event-ID are allowed.
+the deployed Angular origin using `CORS_ALLOWED_ORIGINS`. GET/POST and Last-Event-ID are allowed.
 
 This is live application delivery. It does not wake a suspended/closed Android app
 or display operating-system notifications. Background push needs a separate

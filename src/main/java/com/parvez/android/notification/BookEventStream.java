@@ -38,7 +38,7 @@ public class BookEventStream {
         this.pollMillis = pollMillis;
     }
 
-    public SseEmitter subscribe(String lastEventId) {
+    public SseEmitter subscribe(String lastEventId, java.util.UUID workspaceId) {
         long latest = store.latestId();
         long cursor = parseCursor(lastEventId, latest);
         if (!slots.tryAcquire()) {
@@ -60,7 +60,7 @@ public class BookEventStream {
         });
         emitter.onError(error -> cleanup.run());
         try {
-            workers.submit(() -> deliver(emitter, cursor, closed, cleanup));
+            workers.submit(() -> deliver(emitter, cursor, closed, cleanup, workspaceId));
         } catch (RuntimeException error) {
             cleanup.run();
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Notification service is stopping");
@@ -79,14 +79,14 @@ public class BookEventStream {
         }
     }
 
-    private void deliver(SseEmitter emitter, long cursor, AtomicBoolean closed, Runnable cleanup) {
+    private void deliver(SseEmitter emitter, long cursor, AtomicBoolean closed, Runnable cleanup, java.util.UUID workspaceId) {
         try {
             // Supplies a resume cursor even when no book has been created yet.
             emitter.send(SseEmitter.event().name("ready").id(Long.toString(cursor))
                     .reconnectTime(3000).data("{}", MediaType.APPLICATION_JSON));
             long heartbeatAt = System.nanoTime();
             while (!closed.get() && !Thread.currentThread().isInterrupted()) {
-                var events = store.after(cursor);
+                var events = store.after(cursor, workspaceId);
                 for (var event : events) {
                     if (closed.get()) return;
                     emitter.send(SseEmitter.event().name("book.created").id(Long.toString(event.id()))

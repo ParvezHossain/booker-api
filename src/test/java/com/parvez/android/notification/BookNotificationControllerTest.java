@@ -15,6 +15,9 @@ class BookNotificationControllerTest {
             @Override public long latestId() { return 5; }
         };
         var stream = new BookEventStream(store, 1, 1000);
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                        new com.parvez.android.saas.WorkspacePrincipal("test@example.com", "hash", java.util.UUID.randomUUID()), null));
         try {
             var mvc = MockMvcBuilders.standaloneSetup(new BookNotificationController(stream))
                     .setControllerAdvice(new GlobalExceptionHandler()).build();
@@ -24,6 +27,7 @@ class BookNotificationControllerTest {
                     .andExpect(content().contentType("application/json"));
         } finally {
             stream.shutdown();
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
         }
     }
 }

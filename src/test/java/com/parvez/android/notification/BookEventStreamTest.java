@@ -26,12 +26,12 @@ class BookEventStreamTest {
     void limitsConcurrentConnections() {
         var store = new BookEventStore(null) {
             @Override public long latestId() { return 0; }
-            @Override public java.util.List<Event> after(long cursor) { return java.util.List.of(); }
+            @Override public java.util.List<Event> after(long cursor, java.util.UUID workspaceId) { return java.util.List.of(); }
         };
         var stream = new BookEventStream(store, 1, 1000);
         try {
-            stream.subscribe(null);
-            var error = assertThrows(ResponseStatusException.class, () -> stream.subscribe(null));
+            stream.subscribe(null, java.util.UUID.randomUUID());
+            var error = assertThrows(ResponseStatusException.class, () -> stream.subscribe(null, java.util.UUID.randomUUID()));
             assertEquals(503, error.getStatusCode().value());
         } finally {
             stream.shutdown();

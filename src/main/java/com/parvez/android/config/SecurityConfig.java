@@ -1,12 +1,15 @@
 package com.parvez.android.config;
 
 import jakarta.servlet.DispatcherType;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.crypto.password.Pbkdf2PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -15,6 +18,11 @@ import java.util.List;
 
 @Configuration
 public class SecurityConfig {
+    @Bean
+    PasswordEncoder passwordEncoder() {
+        return Pbkdf2PasswordEncoder.defaultsForSpringSecurity_v5_8();
+    }
+
 
     private static final String[] SWAGGER_WHITELIST = {
             "/v3/api-docs/**",
@@ -36,7 +44,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, SWAGGER_WHITELIST).permitAll()
 
                         // Require authentication for all endpoints under /api/books (including sub-paths)
-                        .requestMatchers("/api/books/**").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/signup").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
+                        .requestMatchers("/api/books/**", "/api/workspace").authenticated()
                         .anyRequest().denyAll())
                 .formLogin(form -> form.disable())
                 .httpBasic(Customizer.withDefaults())
@@ -44,9 +54,9 @@ public class SecurityConfig {
     }
 
     @Bean
-    UrlBasedCorsConfigurationSource corsConfigurationSource() {
+    UrlBasedCorsConfigurationSource corsConfigurationSource(@Value("${app.cors.allowed-origins:http://localhost:4200}") String origins) {
         CorsConfiguration corsConfiguration = new CorsConfiguration();
-        corsConfiguration.setAllowedOrigins(List.of("http://localhost:4200"));
+        corsConfiguration.setAllowedOrigins(java.util.Arrays.stream(origins.split(",")).map(String::strip).toList());
         corsConfiguration.setAllowedMethods(List.of("GET", "POST"));
         corsConfiguration.setAllowedHeaders(List.of("Authorization", "Cache-Control", "Content-Type", "Last-Event-ID"));
 

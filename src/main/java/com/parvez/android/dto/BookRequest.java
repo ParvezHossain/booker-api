@@ -5,7 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
-@Schema(description = "Payload required to create or update a book entry")
+@Schema(description = "Payload required to create a book in your workspace")
 public record BookRequest(
 
         @Schema(
@@ -45,7 +45,7 @@ public record BookRequest(
                 requiredMode = Schema.RequiredMode.REQUIRED
         )
         @NotBlank(message = "Publication date is required")
-        @Size(max = 100, message = "Publication date must not exceed 100 characters")
+        @Size(max = 20, message = "Publication date must not exceed 20 characters")
         String publishedDate,
 
         @Schema(
