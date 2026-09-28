@@ -369,6 +369,85 @@ class BookReadingIntegrationTest {
             assertArrayEquals(pdf, input.readAllBytes());
         }
     }
+    @Test void progressHttpFirstOpenSaveAndRetry() throws Exception {
+        var doc = upload(UUID.randomUUID(), pdf);
+        String url = "/api/books/" + book + "/reading-progress";
+        mvc.perform(get(url).with(user(owner)))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.currentPage").value(0)).andExpect(jsonPath("$.resumePage").value(1))
+                .andExpect(jsonPath("$.totalPages").value(144)).andExpect(jsonPath("$.pagesRead").value(0))
+                .andExpect(jsonPath("$.progressPercentage").value(0)).andExpect(jsonPath("$.lastReadAt").isEmpty())
+                .andExpect(jsonPath("$.version").value(0));
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM reading_progress WHERE book_id = ?", Integer.class, book));
+        String body = progressBody(doc.id(), 93, 0, UUID.randomUUID());
+        String response = mvc.perform(put(url).with(user(owner)).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.currentPage").value(93)).andExpect(jsonPath("$.pagesRead").value(93))
+                .andExpect(jsonPath("$.progressPercentage").value(64.58)).andExpect(jsonPath("$.lastReadAt").isNotEmpty())
+                .andExpect(jsonPath("$.version").value(1)).andReturn().getResponse().getContentAsString();
+        mvc.perform(put(url).with(user(owner)).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(content().json(response));
+        mvc.perform(get(url).with(user(owner))).andExpect(status().isOk()).andExpect(content().json(response));
+        mvc.perform(get(url).with(user(teammate))).andExpect(status().isOk()).andExpect(jsonPath("$.currentPage").value(0));
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM reading_progress WHERE book_id = ?", Integer.class, book));
+    }
+    @Test void progressHttpRejectsMissingNullAndInvalidFields() throws Exception {
+        var doc = upload(UUID.randomUUID(), pdf);
+        String body = progressBody(doc.id(), 93, 0, UUID.randomUUID());
+        for (String invalid : List.of(
+                body.replace("\"version\":0,", ""), body.replace("\"version\":0", "\"version\":null"),
+                body.replace("\"version\":0", "\"version\":-1"),
+                body.replace("\"currentPage\":93", "\"currentPage\":0"),
+                body.replace("\"currentPage\":93", "\"currentPage\":145"),
+                body.replace("\"currentPage\":93,", ""),
+                body.replace("\"currentPage\":93", "\"currentPage\":null"),
+                body.replace("\"" + doc.id() + "\"", "null"),
+                body.replace("\"" + doc.id() + "\"", "\"invalid-uuid\""),
+                body.replaceFirst("\"operationId\":\"[^\"]+\"", "\"operationId\":null"))) {
+            mvc.perform(put("/api/books/{id}/reading-progress", book).with(user(owner))
+                            .contentType("application/json").content(invalid))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.status").value(400));
+        }
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM reading_progress WHERE book_id = ?", Integer.class, book));
+    }
+    @Test void progressHttpConflictsPreserveResumeAndRejectReusedOperations() throws Exception {
+        var doc = upload(UUID.randomUUID(), pdf);
+        String url = "/api/books/" + book + "/reading-progress";
+        UUID operation = UUID.randomUUID();
+        mvc.perform(put(url).with(user(owner)).contentType("application/json").content(progressBody(doc.id(), 80, 0, operation)))
+                .andExpect(status().isOk());
+        mvc.perform(put(url).with(user(owner)).contentType("application/json").content(progressBody(doc.id(), 93, 0, operation)))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.status").value(409));
+        mvc.perform(put(url).with(user(owner)).contentType("application/json").content(progressBody(doc.id(), 144, 2, UUID.randomUUID())))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.currentPage").value(80))
+                .andExpect(jsonPath("$.pagesRead").value(80)).andExpect(jsonPath("$.version").value(1));
+        mvc.perform(put(url).with(user(owner)).contentType("application/json").content(progressBody(doc.id(), 93, 0, UUID.randomUUID())))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.currentPage").value(80))
+                .andExpect(jsonPath("$.pagesRead").value(93)).andExpect(jsonPath("$.version").value(2));
+    }
+    @Test void progressHttpRequiresAuthenticationAndAnAccessibleDocument() throws Exception {
+        String url = "/api/books/" + book + "/reading-progress";
+        String body = progressBody(UUID.randomUUID(), 1, 0, UUID.randomUUID());
+        for (var method : List.of(org.springframework.http.HttpMethod.GET, org.springframework.http.HttpMethod.PUT)) {
+            mvc.perform(request(method, url).contentType("application/json").content(body)
+                            .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.anonymous()))
+                    .andExpect(status().isUnauthorized());
+            mvc.perform(request(method, url).contentType("application/json").content(body).with(user(owner)))
+                    .andExpect(status().isNotFound());
+        }
+        authenticate(owner);
+        var doc = upload(UUID.randomUUID(), pdf);
+        for (var method : List.of(org.springframework.http.HttpMethod.GET, org.springframework.http.HttpMethod.PUT)) {
+            mvc.perform(request(method, url).contentType("application/json")
+                            .content(progressBody(doc.id(), 93, 0, UUID.randomUUID())).with(user(other)))
+                    .andExpect(status().isNotFound());
+        }
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM reading_progress WHERE book_id = ?", Integer.class, book));
+    }
+    private String progressBody(UUID document, int page, long version, UUID operation) {
+        return "{\"documentId\":\"" + document + "\",\"currentPage\":" + page + ",\"version\":" + version
+                + ",\"operationId\":\"" + operation + "\"}";
+    }
     @Test void httpProgressValidationSummariesAndCors() throws Exception {
         var doc = upload(UUID.randomUUID(), pdf);
         String update = "{\"documentId\":\"" + doc.id() + "\",\"currentPage\":93,\"version\":0,\"operationId\":\"" + UUID.randomUUID() + "\"}";

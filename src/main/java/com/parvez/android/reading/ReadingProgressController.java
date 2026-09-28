@@ -27,7 +27,7 @@ public class ReadingProgressController {
     public ResponseEntity<ReadingProgress> get(@PathVariable long bookId) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(progress.get(bookId));
     }
-    @Operation(summary = "Save personal progress", description = "Supply documentId, currentPage (1..totalPages), last known version, and a UUID operationId reused on retry. A stale revision returns 409 with the current ReadingProgress body; its maximum page is merged, but resume position is preserved. A replaced document returns a 409 ApiError. Completion never changes Book.completed.")
+    @Operation(summary = "Save personal progress", description = "Supply documentId, currentPage (1..totalPages), required non-null version (0 on first save), and a UUID operationId reused on retry. A stale revision returns 409 with the current ReadingProgress body; its maximum page is merged, but resume position is preserved. A future revision returns 409 without mutation. A replaced document returns a 409 ApiError. Completion never changes Book.completed.")
     @ApiResponse(responseCode = "409", description = "Revision conflict (ReadingProgress) or replaced document/reused operation (ApiError)",
             content = @io.swagger.v3.oas.annotations.media.Content(mediaType = "application/json",
                     schema = @io.swagger.v3.oas.annotations.media.Schema(oneOf = {ReadingProgress.class, com.parvez.android.dto.ApiError.class})))

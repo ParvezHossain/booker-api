@@ -348,6 +348,25 @@ curl "$API/api/books/1/reading-progress" -H "Authorization: Bearer $ACCESS_TOKEN
 
 `PUT /api/books/{bookId}/reading-progress`
 
+Phase 8 retains the existing concurrency-safe request contract: `documentId`,
+`currentPage`, `version` and `operationId` are required. In particular, an omitted
+or null revision is rejected with 400 instead of silently becoming revision zero.
+Send `version: 0` explicitly for the first save, then use the returned revision.
+Retries reuse the exact request body and operation UUID. Neither percentages,
+total pages, account identity nor workspace identity are writable request fields.
+
+GET on an existing PDF with no progress returns page 0, resume page 1 and a null
+last-read time without creating a record. PUT never accepts page 0: valid saves
+range from 1 to the active PDF's parsed page count. GET/PUT return 404 when the
+book has no PDF or is outside the authenticated workspace. Updates and reads are
+scoped to the authenticated account, even when other accounts share the book.
+Successful responses and revision conflicts use `Cache-Control: no-store`.
+
+Phase 8 verification: all 57 backend tests passed with none skipped. Four new
+HTTP integration tests cover first-open state, the 93/144-page example, exact
+retries, required/null/invalid fields, future and stale revision conflicts,
+operation reuse, authentication, missing PDFs and workspace/account isolation.
+
 ```sh
 curl -X PUT "$API/api/books/1/reading-progress" \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \

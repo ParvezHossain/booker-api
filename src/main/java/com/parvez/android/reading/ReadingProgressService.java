@@ -101,7 +101,10 @@ public class ReadingProgressService {
         if (result.size() != ids.size()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found");
         return result;
     }
-    public record Update(@NotNull UUID documentId, @Min(1) int currentPage, @Min(0) long version, @NotNull UUID operationId) {}
+    public record Update(@NotNull UUID documentId, @Min(1) int currentPage,
+                         @com.fasterxml.jackson.annotation.JsonProperty(value = "version", required = true)
+                         @com.fasterxml.jackson.annotation.JsonSetter(nulls = com.fasterxml.jackson.annotation.Nulls.FAIL)
+                         @Min(0) long version, @NotNull UUID operationId) {}
     public record UpdateResult(ReadingProgress progress, boolean conflict) {}
     public record Summary(long bookId, BookDocument.DocumentResponse document, ReadingProgress progress) {}
 }
