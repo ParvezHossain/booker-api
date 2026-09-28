@@ -56,7 +56,7 @@ public record BookRequest(
         String description,
 
         @Schema(
-                description = "Status indicating whether the reading has been completed",
+                description = "Manually supplied workspace book status. Independent of each account's PDF reading completion.",
                 example = "true"
         )
         boolean completed

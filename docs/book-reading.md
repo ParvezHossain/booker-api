@@ -197,6 +197,40 @@ backward navigation. Document replacement invalidates old progress updates; reop
 and load the new document. Progress for the new document starts at zero, even if
 an older progress row remains until the next accepted update.
 
+## Phase 9 completion decision
+
+Both completion concepts remain separate:
+
+| Field | Meaning and scope |
+| --- | --- |
+| `Book.completed` | Manually supplied workspace book metadata, accepted by `BookRequest` on creation and returned by existing book APIs |
+| `ReadingProgress.completed` | Derived per account and active document: `max_page_reached == page_count` |
+
+`BookService.createBook` already persists the caller's metadata flag. No existing
+backend update endpoint persists a completion toggle; the Angular bookshelf toggle
+only updates the current visit. Phase 9 preserves those behaviors and does not
+introduce an automatic write to `books.completed` or a new toggle endpoint.
+
+Reaching the last page completes personal reading. Returning to an earlier page
+changes the resume position but retains completion. A stale update that merges
+the final page can also complete personal reading, while preserving the accepted
+resume position and last-read timestamp. Another account's progress is unaffected.
+Replacing the PDF resets visible personal completion for the new document, even
+if the book's manual metadata says it is completed. Books without PDFs can retain
+either value of the manual flag.
+
+Completion is based on exact page counts, never rounded percentage. For example,
+19999/20000 pages rounds to 100.00% at two decimal places but is still incomplete.
+Clients must use the `completed` boolean for completion badges. An unopened
+single-page document is incomplete; saving page 1 completes it. These are page
+navigation semantics, not proof that every preceding page was read. No database
+migration or backfill is needed.
+
+Phase 9 verification: all 64 backend tests passed with none skipped. Four added
+unit tests cover completion boundaries and rounding; three integration tests
+cover per-account completion, replacement, preservation of manual book status,
+summary/API consistency and stale final-page merges.
+
 ## API conventions
 
 Except for the Google callback, every endpoint below requires an authenticated

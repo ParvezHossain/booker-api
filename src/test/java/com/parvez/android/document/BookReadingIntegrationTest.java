@@ -29,6 +29,7 @@ class BookReadingIntegrationTest {
     @Autowired WorkspaceAccounts accounts;
     @Autowired BookDocumentService documents;
     @Autowired ReadingProgressService progress;
+    @Autowired com.parvez.android.service.BookService books;
     @Autowired FileStorageService storage;
     @Autowired JdbcTemplate jdbc;
     @Autowired WebApplicationContext context;
@@ -256,6 +257,52 @@ class BookReadingIntegrationTest {
         assertNotEquals(doc.id(), replacement.id()); assertEquals(0, progress.get(book).currentPage());
         assertEquals(409, assertThrows(ResponseStatusException.class, () -> progress.update(book, request)).getStatusCode().value());
         assertEquals(2, jdbc.queryForObject("SELECT count(*) FROM book_documents WHERE book_id = ?", Integer.class, book));
+    }
+    @Test void personalCompletionIsPerUserAndResetsOnDocumentReplacement() throws Exception {
+        var doc = upload(UUID.randomUUID(), pdf);
+        var completed = progress.update(book, new ReadingProgressService.Update(doc.id(), 144, 0, UUID.randomUUID())).progress();
+        assertTrue(completed.completed());
+        var backwards = progress.update(book, new ReadingProgressService.Update(doc.id(), 20, completed.version(), UUID.randomUUID())).progress();
+        assertTrue(backwards.completed());
+        mvc.perform(get("/api/books/{id}/reading-progress", book).with(user(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.completed").value(true));
+        mvc.perform(get("/api/books/reading-summaries").param("bookIds", Long.toString(book)).with(user(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].progress.completed").value(true));
+        authenticate(teammate);
+        assertFalse(progress.get(book).completed());
+        assertFalse(progress.update(book, new ReadingProgressService.Update(doc.id(), 10, 0, UUID.randomUUID())).progress().completed());
+        authenticate(owner);
+        var replacement = upload(UUID.randomUUID(), pdf(10));
+        assertFalse(progress.get(book).completed());
+        assertEquals(0, progress.get(book).pagesRead());
+        assertFalse(progress.update(book, new ReadingProgressService.Update(replacement.id(), 1, 0, UUID.randomUUID())).progress().completed());
+        assertFalse(jdbc.queryForObject("SELECT completed FROM books WHERE id = ?", Boolean.class, book));
+    }
+    @Test void manuallyCompletedBookRemainsCompletedWhilePersonalReadingChanges() throws Exception {
+        var created = books.createBook(new com.parvez.android.dto.BookRequest("1234567890123", "Already read",
+                "Author", "2026", "Manual completion", true));
+        book = created.id();
+        assertTrue(created.completed());
+        var doc = upload(UUID.randomUUID(), pdf);
+        assertFalse(progress.get(book).completed());
+        var started = progress.update(book, new ReadingProgressService.Update(doc.id(), 1, 0, UUID.randomUUID())).progress();
+        assertFalse(started.completed());
+        assertTrue(books.getBookByISBN(created.isbn()).completed());
+        assertTrue(progress.update(book, new ReadingProgressService.Update(doc.id(), 144, started.version(), UUID.randomUUID())).progress().completed());
+        upload(UUID.randomUUID(), pdf(10));
+        assertFalse(progress.get(book).completed());
+        mvc.perform(get("/api/books/isbn/{isbn}", created.isbn()).with(user(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.completed").value(true));
+    }
+    @Test void staleFinalPageMergeCompletesWithoutMovingResumePosition() throws Exception {
+        var doc = upload(UUID.randomUUID(), pdf);
+        var saved = progress.update(book, new ReadingProgressService.Update(doc.id(), 80, 0, UUID.randomUUID())).progress();
+        var result = progress.update(book, new ReadingProgressService.Update(doc.id(), 144, 0, UUID.randomUUID()));
+        assertTrue(result.conflict());
+        assertTrue(result.progress().completed());
+        assertEquals(80, result.progress().resumePage());
+        assertEquals(saved.lastReadAt(), result.progress().lastReadAt());
+        assertFalse(jdbc.queryForObject("SELECT completed FROM books WHERE id = ?", Boolean.class, book));
     }
     @Test void progressResumesAndRetriesDoNotChangePersistedState() throws Exception {
         var doc = upload(UUID.randomUUID(), pdf);
