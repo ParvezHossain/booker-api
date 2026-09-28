@@ -33,6 +33,7 @@ class GoogleDriveIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired BookDocumentService documents;
     @Autowired FileStorageService storage;
+    @Autowired org.springframework.web.context.WebApplicationContext context;
     WorkspacePrincipal user;
     long book;
     @BeforeEach void setup() {
@@ -89,6 +90,9 @@ class GoogleDriveIntegrationTest {
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM book_documents WHERE book_id = ?", Integer.class, book));
         connections.disconnect();
         assertEquals(1, documents.active(book).pageCount());
+        assertEquals("COMPLETED", imports.start(book, id, "selected-file").status());
+        assertEquals(409, assertThrows(ResponseStatusException.class, () -> imports.start(book, id, "another-file")).getStatusCode().value());
+        assertEquals(409, assertThrows(ResponseStatusException.class, () -> imports.start(book, UUID.randomUUID(), "selected-file")).getStatusCode().value());
     }
     @Test void unsupportedFilesAndRateLimits() {
         connect();
@@ -99,5 +103,54 @@ class GoogleDriveIntegrationTest {
         var retry = UUID.randomUUID(); imports.start(book, retry, "busy"); imports.processNext(); authenticate();
         assertEquals("PENDING", imports.status(book, retry).status());
         verify(gateway, never()).download(anyString(), anyString(), any());
+    }
+    @Test void transientImportsStopAfterThreeAttempts() {
+        connect();
+        when(gateway.metadata("access", "busy")).thenThrow(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Google busy"));
+        UUID id = UUID.randomUUID(); imports.start(book, id, "busy");
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            jdbc.update("UPDATE google_drive_imports SET available_at = now() - interval '1 second' WHERE id = ?", id);
+            imports.processNext(); authenticate();
+            assertEquals(attempt < 3 ? "PENDING" : "FAILED", imports.status(book, id).status());
+            assertEquals(attempt, jdbc.queryForObject("SELECT attempts FROM google_drive_imports WHERE id = ?", Integer.class, id));
+        }
+        imports.processNext(); authenticate();
+        verify(gateway, times(3)).metadata("access", "busy");
+        verify(gateway, never()).download(anyString(), anyString(), any());
+    }
+    @Test void deniedDownloadsFailAndDisconnectCancelsPendingImports() {
+        connect();
+        when(gateway.metadata("access", "denied")).thenReturn(new GoogleDriveGateway.DriveFile("book.pdf", "application/pdf", 100, false));
+        UUID denied = UUID.randomUUID(); imports.start(book, denied, "denied");
+        imports.processNext(); authenticate();
+        assertEquals("FAILED", imports.status(book, denied).status());
+        UUID pending = UUID.randomUUID(); imports.start(book, pending, "pending");
+        connections.disconnect();
+        assertEquals("FAILED", imports.status(book, pending).status());
+        verify(gateway, never()).download(anyString(), anyString(), any());
+    }
+    @Test void importApiRejectsUrlsAndEnforcesWorkspaceAndOwner() throws Exception {
+        connect();
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context)
+                .apply(org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity()).build();
+        String url = "/api/books/" + book + "/document/imports/google-drive";
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(url)
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user(user))
+                        .header("Idempotency-Key", UUID.randomUUID()).contentType("application/json")
+                        .content("{\"fileId\":\"https://drive.google.com/file/d/untrusted\"}"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+        authenticate(); UUID id = UUID.randomUUID(); imports.start(book, id, "selected-file");
+        String email = "other-" + UUID.randomUUID() + "@example.com";
+        accounts.register(new WorkspaceAccounts.Signup("Other workspace", email, "test-password-123"));
+        var other = accounts.loadUserByUsername(email);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/books/" + book + "/document/imports/" + id)
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user(other)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+        authenticate();
+        jdbc.update("UPDATE workspace_users SET workspace_id = ? WHERE email = ?", WorkspacePrincipal.currentWorkspace(), email);
+        var teammate = accounts.loadUserByUsername(email);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/books/" + book + "/document/imports/" + id)
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user(teammate)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
     }
 }

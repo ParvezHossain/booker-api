@@ -35,6 +35,13 @@ public class GoogleDriveImportService {
     }
     public ImportStatus start(long bookId, UUID operation, String fileId) {
         access.require(bookId);
+        // Completed/pending operations remain replayable after disconnect; new work needs a grant.
+        if (jdbc.queryForObject("SELECT count(*) FROM google_drive_imports WHERE id = ? AND book_id = ? AND user_email = ?",
+                Integer.class, operation, bookId, WorkspacePrincipal.currentEmail()) > 0) {
+            var existing = status(bookId, operation);
+            if (!fileId.equals(existing.fileId())) throw new ResponseStatusException(HttpStatus.CONFLICT, "Operation ID already used for another file");
+            return existing;
+        }
         if (!connections.connected()) throw new ResponseStatusException(HttpStatus.CONFLICT, "Connect Google Drive first");
         jdbc.update("INSERT INTO google_drive_imports (id, book_id, user_email, file_id) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
                 operation, bookId, WorkspacePrincipal.currentEmail(), fileId);
@@ -76,8 +83,9 @@ public class GoogleDriveImportService {
         } catch (Exception ex) {
             boolean retry = ex instanceof ResponseStatusException failure && failure.getStatusCode().value() == 503 && attempt < 3;
             String message = ex instanceof ResponseStatusException failure ? failure.getReason() : "Import failed; reconnect Google Drive and try again";
-            jdbc.update("UPDATE google_drive_imports SET status = ?, message = ?, available_at = now() + interval '30 seconds', updated_at = now() WHERE id = ?",
-                    retry ? "PENDING" : "FAILED", message, id);
+            long delaySeconds = attempt == 1 ? 30 : 60;
+            jdbc.update("UPDATE google_drive_imports SET status = ?, message = ?, available_at = now() + (? * interval '1 second'), updated_at = now() WHERE id = ?",
+                    retry ? "PENDING" : "FAILED", message, delaySeconds, id);
         } finally { SecurityContextHolder.clearContext(); }
     }
     public record ImportStatus(UUID importId, long bookId, String fileId, String status, UUID documentId, String message) {}

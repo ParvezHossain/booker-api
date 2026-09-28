@@ -48,7 +48,7 @@ public class GoogleDriveGateway {
         try {
             var json = client.get().uri("https://www.googleapis.com/drive/v3/files/{id}?fields=id,name,mimeType,size,capabilities(canDownload)&supportsAllDrives=true", fileId)
                     .headers(headers -> headers.setBearerAuth(accessToken)).retrieve()
-                    .onStatus(status -> status.value() >= 400, (request, response) -> { throw failure(response.getStatusCode().value()); })
+                    .onStatus(status -> status.value() >= 400, (request, response) -> { throw driveFailure(response); })
                     .body(JsonNode.class);
             if (json == null) throw failure(502);
             return new DriveFile(json.path("name").asText(), json.path("mimeType").asText(), json.path("size").asLong(-1),
@@ -59,10 +59,32 @@ public class GoogleDriveGateway {
         try {
             return client.get().uri("https://www.googleapis.com/drive/v3/files/{id}?alt=media&supportsAllDrives=true", fileId)
                     .headers(headers -> headers.setBearerAuth(token)).exchange((request, response) -> {
-                        if (!response.getStatusCode().is2xxSuccessful()) throw failure(response.getStatusCode().value());
+                        if (!response.getStatusCode().is2xxSuccessful()) throw driveFailure(response);
                         return consumer.read(response.getBody());
                     });
         } catch (RestClientException ex) { throw failure(503); }
+    }
+    private ResponseStatusException driveFailure(org.springframework.http.client.ClientHttpResponse response) throws IOException {
+        int status = response.getStatusCode().value();
+        if (status == 403) {
+            // Inspect a bounded error body; never expose Google's response or credentials to clients.
+            try {
+                byte[] body = response.getBody().readNBytes(16385);
+                if (body.length <= 16384) {
+                    var json = tools.jackson.databind.json.JsonMapper.builder().build().readTree(body);
+                    if (json != null) {
+                        for (var error : json.path("error").path("errors")) {
+                            String reason = error.path("reason").asText();
+                            if ("rateLimitExceeded".equals(reason) || "userRateLimitExceeded".equals(reason))
+                                return failure(503);
+                        }
+                    }
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // Malformed/oversized errors remain a safe denial, not an unbounded retry.
+            }
+        }
+        return failure(status);
     }
     private ResponseStatusException failure(int status) {
         if (status == 429 || status >= 500) return new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Google Drive is temporarily unavailable; retry later");

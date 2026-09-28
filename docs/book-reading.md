@@ -425,6 +425,41 @@ curl "$API/api/books/reading-summaries?bookIds=1,2" -H "Authorization: Bearer $A
 
 ## Google Drive APIs and setup
 
+### Phase 10 implementation
+
+The existing OAuth/Picker/import flow remains the integration boundary. OAuth uses
+PKCE and single-use browser-bound state; account-bound AES-256-GCM protects stored
+refresh credentials. Only `drive.file` is requested. The backend refreshes access
+tokens and verifies the selected file's MIME type, size and download capability
+before streaming it through the normal PDF validation and private-storage pipeline.
+Only file IDs are accepted; arbitrary Drive URLs are rejected. Imported PDFs
+remain readable independently of the original Drive file or account connection.
+
+The gateway recognizes both `rateLimitExceeded` and `userRateLimitExceeded` inside
+403 responses, as described in Google's
+[Drive error guide](https://developers.google.com/workspace/drive/api/guides/handle-errors).
+These become retryable 503 errors, as do HTTP 429 and server failures. Other 403
+responses remain permission denials. Error-body inspection is capped at 16 KiB;
+upstream error details and credentials are never returned to clients. Malformed
+or oversized 403 bodies remain denials.
+
+Transient imports retry after 30 then 60 seconds, with at most three ordinary
+attempts. Replaying an existing import operation returns its current status even
+after disconnect, but starting a new import still requires a connected account.
+Reusing that operation for a different file is rejected. Disconnect cancels pending
+imports; jobs already running may finish. Import status is private to the account
+that initiated it, including within a shared workspace.
+
+Live Google consent, Picker and imports still require deployment-specific OAuth
+credentials and browser verification. Automated tests use simulated Google
+responses and do not establish that a live account has been connected.
+
+Phase 10 verification: all 69 backend tests passed with none skipped. Five new
+tests cover 403 rate-limit classification, safe permission errors, retry exhaustion,
+denied downloads, disconnect cancellation, URL rejection and import ownership.
+The existing successful-import test now also verifies retry after disconnect and
+rejection of reused operation IDs for a different file.
+
 Enable Drive API and Google Picker in one Google Cloud project. Configure a web
 OAuth client and its exact callback URI. Request only `drive.file`; the Picker
 lets users grant access to selected files. Google OAuth consent/test-user setup
