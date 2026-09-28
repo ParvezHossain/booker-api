@@ -1,0 +1,78 @@
+package com.parvez.android.document;
+
+import org.apache.pdfbox.Loader;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.Semaphore;
+
+@Component
+public class PdfInspector {
+    private final Semaphore parsers = new Semaphore(2);
+    private final int maxPages;
+    public PdfInspector(@Value("${books.documents.max-pages:20000}") int maxPages) { this.maxPages = maxPages; }
+    public int inspect(Resource resource) throws IOException {
+        if (!parsers.tryAcquire()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "PDF validation is busy; retry later");
+        Path temporary = null;
+        try {
+            try (var input = resource.getInputStream()) {
+                if (!new String(input.readNBytes(5), java.nio.charset.StandardCharsets.US_ASCII).equals("%PDF-"))
+                    throw invalid();
+            }
+            java.io.File file;
+            if (resource.isFile()) file = resource.getFile();
+            else {
+                temporary = Files.createTempFile("booker-pdf-", ".pdf");
+                try (var input = resource.getInputStream()) { Files.copy(input, temporary, java.nio.file.StandardCopyOption.REPLACE_EXISTING); }
+                file = temporary.toFile();
+            }
+            try (var pdf = Loader.loadPDF(file)) {
+                int pages = pdf.getNumberOfPages();
+                var catalog = pdf.getDocumentCatalog();
+                if (pdf.isEncrypted() || pages < 1 || pages > maxPages || catalog.getOpenAction() != null
+                        || catalog.getCOSObject().containsKey(org.apache.pdfbox.cos.COSName.AA)
+                        || (catalog.getNames() != null && (catalog.getNames().getJavaScript() != null
+                        || catalog.getNames().getEmbeddedFiles() != null))) throw invalid();
+                for (var page : pdf.getPages()) {
+                    if (page.getCOSObject().containsKey(org.apache.pdfbox.cos.COSName.AA)) throw invalid();
+                }
+                rejectActiveContent(catalog.getCOSObject());
+                return pages;
+            } catch (IOException | IllegalArgumentException ex) { throw invalid(); }
+        } finally {
+            parsers.release();
+            if (temporary != null) Files.deleteIfExists(temporary);
+        }
+    }
+    private void rejectActiveContent(org.apache.pdfbox.cos.COSBase root) {
+        var pending = new java.util.ArrayDeque<org.apache.pdfbox.cos.COSBase>();
+        var seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<org.apache.pdfbox.cos.COSBase, Boolean>());
+        pending.add(root);
+        while (!pending.isEmpty()) {
+            var value = pending.removeFirst();
+            if (!seen.add(value)) continue;
+            if (seen.size() > 250000) throw invalid();
+            if (value instanceof org.apache.pdfbox.cos.COSObject object) {
+                if (object.getObject() != null) pending.add(object.getObject());
+            } else if (value instanceof org.apache.pdfbox.cos.COSDictionary dictionary) {
+                String action = dictionary.getNameAsString(org.apache.pdfbox.cos.COSName.S);
+                if (dictionary.containsKey(org.apache.pdfbox.cos.COSName.JS)
+                        || dictionary.containsKey(org.apache.pdfbox.cos.COSName.XFA)
+                        || java.util.Set.of("JavaScript", "Launch", "SubmitForm", "ImportData", "Rendition", "GoToE").contains(action == null ? "" : action)) throw invalid();
+                for (var child : dictionary.getValues()) if (child != null) pending.add(child);
+            } else if (value instanceof org.apache.pdfbox.cos.COSArray array) {
+                for (var child : array) if (child != null) pending.add(child);
+            }
+        }
+    }
+
+    private ResponseStatusException invalid() {
+        return new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+                "Use a valid, unencrypted PDF without document scripts or attachments, within the page limit");
+    }
+}

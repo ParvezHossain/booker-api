@@ -27,6 +27,7 @@ import java.util.List;
 @RequestMapping("/api/books")
 @Validated
 @Tag(name = "Book Management", description = "Create and search books in your authenticated workspace")
+@SecurityRequirement(name = "bearerAuth")
 @SecurityRequirement(name = "basicAuth")
 public class BookController {
 
@@ -49,7 +50,7 @@ public class BookController {
                             array = @ArraySchema(schema = @Schema(implementation = BookResponse.class))
                     )
             ),
-            @ApiResponse(responseCode = "401", description = "Unauthorized - Basic authentication required", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Unauthorized - bearer token or Basic authentication required", content = @Content),
             @ApiResponse(responseCode = "500", description = "Internal server error", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     })
     @GetMapping
@@ -81,7 +82,7 @@ public class BookController {
                     description = "Book found",
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = BookResponse.class))
             ),
-            @ApiResponse(responseCode = "401", description = "Unauthorized - Basic authentication required", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Unauthorized - bearer token or Basic authentication required", content = @Content),
             @ApiResponse(responseCode = "404", description = "No book found matching the given ISBN", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     })
     @GetMapping("/isbn/{isbn}")
@@ -111,7 +112,7 @@ public class BookController {
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = BookResponse.class))
             ),
             @ApiResponse(responseCode = "400", description = "Bad Request - Request body failed validation constraints", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class))),
-            @ApiResponse(responseCode = "401", description = "Unauthorized - Basic authentication required", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Unauthorized - bearer token or Basic authentication required", content = @Content),
             @ApiResponse(responseCode = "403", description = "Workspace book limit reached", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class))),
             @ApiResponse(responseCode = "409", description = "Conflict - ISBN already exists in your workspace", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     })

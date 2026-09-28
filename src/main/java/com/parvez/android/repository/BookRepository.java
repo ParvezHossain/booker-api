@@ -11,5 +11,6 @@ public interface BookRepository extends JpaRepository<Book, Long> {
     List<Book> findAllByWorkspaceIdAndAuthorAndTitle(UUID workspaceId, String author, String title);
     Optional<Book> findByWorkspaceIdAndIsbn(UUID workspaceId, String isbn);
     boolean existsByWorkspaceIdAndIsbn(UUID workspaceId, String isbn);
+    Optional<Book> findByIdAndWorkspaceId(Long id, UUID workspaceId);
     long countByWorkspaceId(UUID workspaceId);
 }

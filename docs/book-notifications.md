@@ -1,6 +1,6 @@
 # Book notifications
 
-Connect to `GET /api/books/events` with the same HTTP Basic Authorization header
+Connect to `GET /api/books/events` with the same bearer access-token Authorization header (or legacy HTTP Basic header)
 as the book API and `Accept: text/event-stream`. Use HTTPS in deployment.
 Each authenticated subscriber receives only books from their own workspace, including
 replayed events. Register credentials using `/api/auth/signup`.

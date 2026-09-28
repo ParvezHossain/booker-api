@@ -32,7 +32,7 @@ public class SecurityConfig {
 
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, com.parvez.android.auth.TokenService tokens) throws Exception {
         return http
                 .cors(Customizer.withDefaults())
                 .csrf(csrf -> csrf.disable())
@@ -44,12 +44,15 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, SWAGGER_WHITELIST).permitAll()
 
                         // Require authentication for all endpoints under /api/books (including sub-paths)
-                        .requestMatchers(HttpMethod.POST, "/api/auth/signup").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
-                        .requestMatchers("/api/books/**", "/api/workspace").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/actuator/health", "/api/integrations/google-drive/callback").permitAll()
+                        .requestMatchers("/api/books/**", "/api/workspace", "/api/integrations/google-drive/**").authenticated()
                         .anyRequest().denyAll())
                 .formLogin(form -> form.disable())
                 .httpBasic(Customizer.withDefaults())
+                .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt
+                        .decoder(tokens::decodeAccess)
+                        .jwtAuthenticationConverter(tokens::authentication)))
                 .build();
     }
 
@@ -57,8 +60,9 @@ public class SecurityConfig {
     UrlBasedCorsConfigurationSource corsConfigurationSource(@Value("${app.cors.allowed-origins:http://localhost:4200}") String origins) {
         CorsConfiguration corsConfiguration = new CorsConfiguration();
         corsConfiguration.setAllowedOrigins(java.util.Arrays.stream(origins.split(",")).map(String::strip).toList());
-        corsConfiguration.setAllowedMethods(List.of("GET", "POST"));
-        corsConfiguration.setAllowedHeaders(List.of("Authorization", "Cache-Control", "Content-Type", "Last-Event-ID"));
+        corsConfiguration.setAllowedMethods(List.of("GET", "HEAD", "POST", "PUT", "DELETE"));
+        corsConfiguration.setAllowedHeaders(List.of("Authorization", "Cache-Control", "Content-Type", "Last-Event-ID", "Range", "If-Range", "Idempotency-Key"));
+        corsConfiguration.setExposedHeaders(List.of("Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition", "ETag"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", corsConfiguration);

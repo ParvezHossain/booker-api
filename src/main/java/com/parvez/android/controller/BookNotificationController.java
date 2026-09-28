@@ -19,6 +19,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @Tag(name = "Book notifications", description = "Workspace-scoped server-sent events")
+@SecurityRequirement(name = "bearerAuth")
 @SecurityRequirement(name = "basicAuth")
 public class BookNotificationController {
     private final BookEventStream stream;

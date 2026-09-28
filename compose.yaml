@@ -30,8 +30,25 @@ services:
       DATABASE_URL: jdbc:postgresql://postgres:5432/android
       DATABASE_USERNAME: admin
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a base64-encoded random key of at least 32 bytes}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-PT15M}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-P7D}
+      GOOGLE_DRIVE_ENABLED: ${GOOGLE_DRIVE_ENABLED:-false}
+      GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID:-}
+      GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET:-}
+      GOOGLE_DRIVE_REDIRECT_URI: ${GOOGLE_DRIVE_REDIRECT_URI:-}
+      GOOGLE_DRIVE_ENCRYPTION_KEY: ${GOOGLE_DRIVE_ENCRYPTION_KEY:-}
+      GOOGLE_DRIVE_PICKER_API_KEY: ${GOOGLE_DRIVE_PICKER_API_KEY:-}
+      GOOGLE_DRIVE_PROJECT_NUMBER: ${GOOGLE_DRIVE_PROJECT_NUMBER:-}
+      BOOK_MAX_PAGES: ${BOOK_MAX_PAGES:-20000}
+      BOOK_STORAGE_DIRECTORY: /app/data/books
+      BOOK_MAX_FILE_SIZE: ${BOOK_MAX_FILE_SIZE:-200MB}
+      BOOK_MAX_REQUEST_SIZE: ${BOOK_MAX_REQUEST_SIZE:-201MB}
+      BOOK_WORKSPACE_STORAGE_LIMIT: ${BOOK_WORKSPACE_STORAGE_LIMIT:-5GB}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       MANAGEMENT_OTLP_METRICS_EXPORT_URL:
+    volumes:
+      - book-files:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,3 +56,4 @@ services:
         condition: service_started
 volumes:
   postgres-data:
+  book-files:

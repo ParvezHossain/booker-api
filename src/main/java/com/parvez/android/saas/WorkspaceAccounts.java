@@ -60,7 +60,7 @@ public class WorkspaceAccounts implements UserDetailsService {
 class WorkspaceController {
     private final WorkspaceAccounts accounts;
     WorkspaceController(WorkspaceAccounts accounts) { this.accounts = accounts; }
-    @Operation(summary = "Create a workspace and owner account", description = "Public endpoint; authentication is not required. Creates an empty FREE workspace with a 100-book limit. Passwords are stored as salted PBKDF2 hashes. Use the registered email and password with HTTP Basic for subsequent requests.")
+    @Operation(summary = "Create a workspace and owner account", description = "Public endpoint; authentication is not required. Creates an empty FREE workspace with a 100-book limit. Passwords are stored as salted PBKDF2 hashes. Log in at POST /api/auth/login to obtain access and refresh tokens.")
     @ApiResponse(responseCode = "201", description = "Workspace created", content = @Content(mediaType = "application/json", schema = @Schema(implementation = SignupResponse.class)))
     @ApiResponse(responseCode = "400", description = "Invalid signup fields or JSON", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @ApiResponse(responseCode = "409", description = "Email already registered; no workspace is created", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
@@ -70,6 +70,7 @@ class WorkspaceController {
         return accounts.register(request);
     }
     @Operation(summary = "Get your workspace and usage", description = "Returns the authenticated owner's workspace, current entitlement and number of books. Plan changes are performed by an operator; this API does not process payments.")
+    @SecurityRequirement(name = "bearerAuth")
     @SecurityRequirement(name = "basicAuth")
     @ApiResponse(responseCode = "200", description = "Current workspace", content = @Content(mediaType = "application/json", schema = @Schema(implementation = WorkspaceResponse.class)))
     @ApiResponse(responseCode = "401", description = "Missing or invalid owner credentials", content = @Content)

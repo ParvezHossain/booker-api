@@ -13,12 +13,14 @@ public class WorkspacePrincipal extends User {
         super(email, password, List.of(new SimpleGrantedAuthority("ROLE_OWNER")));
         this.workspaceId = workspaceId;
     }
-    public static UUID currentWorkspace() {
+    public static UUID currentWorkspace() { return current().workspaceId; }
+    public static String currentEmail() { return current().getUsername(); }
+    public static WorkspacePrincipal current() {
         var auth = SecurityContextHolder.getContext().getAuthentication();
 
         if (auth == null || !(auth.getPrincipal() instanceof WorkspacePrincipal principal)) {
             throw new AuthenticationCredentialsNotFoundException("Workspace authentication required");
         }
-        return principal.workspaceId;
+        return principal;
     }
 }

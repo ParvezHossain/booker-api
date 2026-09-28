@@ -100,6 +100,24 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.valueOf(exception.getStatusCode().value()), exception.getReason(), request);
     }
 
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> handleUploadSize(HttpServletRequest request) {
+        return buildError(HttpStatus.PAYLOAD_TOO_LARGE, "PDF exceeds the upload limit", request);
+    }
+
+    @ExceptionHandler({org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class,
+            org.springframework.web.bind.MissingRequestHeaderException.class,
+            org.springframework.web.multipart.support.MissingServletRequestPartException.class})
+    public ResponseEntity<ApiError> handleInvalidParameter(HttpServletRequest request) {
+        return buildError(HttpStatus.BAD_REQUEST, "Missing or invalid request parameter", request);
+    }
+
+    @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiError> handleUnsupportedMedia(HttpServletRequest request) {
+        return buildError(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Unsupported content type", request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleGenericException(
             Exception exception,
