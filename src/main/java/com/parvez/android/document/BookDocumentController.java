@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 @RestController
@@ -56,7 +55,7 @@ public class BookDocumentController {
     public ResponseEntity<Resource> content(@PathVariable long bookId,
             @RequestParam(defaultValue = "false") boolean download, @RequestParam(required = false) UUID documentId) {
         var doc = activeDocument(bookId, documentId);
-        return contentHeaders(doc, download).body(documents.content(doc));
+        return DocumentHttpResponse.headers(doc, download).body(documents.content(doc));
     }
 
     @Operation(summary = "Get PDF content headers without reading its bytes", description = "Requires the same workspace authorization as GET. Checks content availability, ignores Range, and returns the complete document length. Optional documentId pins the active version.")
@@ -69,22 +68,10 @@ public class BookDocumentController {
         var doc = activeDocument(bookId, documentId);
         // Resolve the resource to check availability, without opening a content stream.
         documents.content(doc);
-        return contentHeaders(doc, download).contentLength(doc.fileSize()).build();
+        return DocumentHttpResponse.headers(doc, download).contentLength(doc.fileSize()).build();
     }
 
     private BookDocument activeDocument(long bookId, UUID documentId) {
-        var doc = documents.active(bookId);
-        if (documentId != null && !documentId.equals(doc.id()))
-            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.CONFLICT, "The PDF was replaced; reopen the book");
-        return doc;
-    }
-
-    private ResponseEntity.BodyBuilder contentHeaders(BookDocument doc, boolean download) {
-        return ResponseEntity.ok().contentType(MediaType.APPLICATION_PDF)
-                .cacheControl(CacheControl.noStore()).eTag('"' + doc.id().toString() + '"')
-                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.builder(download ? "attachment" : "inline")
-                        .filename(doc.fileName(), StandardCharsets.UTF_8).build().toString())
-                .header("X-Content-Type-Options", "nosniff");
+        return DocumentHttpResponse.pin(documents.active(bookId), documentId);
     }
 }

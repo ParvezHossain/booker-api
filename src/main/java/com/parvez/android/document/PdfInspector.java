@@ -16,7 +16,9 @@ public class PdfInspector {
     private final Semaphore parsers = new Semaphore(2);
     private final int maxPages;
     public PdfInspector(@Value("${books.documents.max-pages:20000}") int maxPages) { this.maxPages = maxPages; }
-    public int inspect(Resource resource) throws IOException {
+    public int inspect(Resource resource) throws IOException { return inspect(resource, maxPages); }
+    public int inspectPublic(Resource resource) throws IOException { return inspect(resource, Integer.MAX_VALUE); }
+    private int inspect(Resource resource, int pageLimit) throws IOException {
         if (!parsers.tryAcquire()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "PDF validation is busy; retry later");
         Path temporary = null;
         try {
@@ -34,7 +36,7 @@ public class PdfInspector {
             try (var pdf = Loader.loadPDF(file)) {
                 int pages = pdf.getNumberOfPages();
                 var catalog = pdf.getDocumentCatalog();
-                if (pdf.isEncrypted() || pages < 1 || pages > maxPages || catalog.getOpenAction() != null
+                if (pdf.isEncrypted() || pages < 1 || pages > pageLimit || catalog.getOpenAction() != null
                         || catalog.getCOSObject().containsKey(org.apache.pdfbox.cos.COSName.AA)
                         || (catalog.getNames() != null && (catalog.getNames().getJavaScript() != null
                         || catalog.getNames().getEmbeddedFiles() != null))) throw invalid();

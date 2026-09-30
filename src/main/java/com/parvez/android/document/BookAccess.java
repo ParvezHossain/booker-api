@@ -21,5 +21,15 @@ public class BookAccess {
         if (jdbc.queryForList("SELECT id FROM books WHERE id = ? AND workspace_id = ? FOR UPDATE",
                 bookId, WorkspacePrincipal.currentWorkspace()).isEmpty()) throw notFound();
     }
+    public void requirePublic(long bookId) {
+        WorkspacePrincipal.current();
+        if (jdbc.queryForList("SELECT id FROM books WHERE id = ? AND library_type = 'PUBLIC'", bookId).isEmpty())
+            throw notFound();
+    }
+    public void lockPublic(long bookId) {
+        WorkspacePrincipal.current();
+        if (jdbc.queryForList("SELECT id FROM books WHERE id = ? AND library_type = 'PUBLIC' FOR UPDATE", bookId).isEmpty())
+            throw notFound();
+    }
     private static ResponseStatusException notFound() { return new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found"); }
 }

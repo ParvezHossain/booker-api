@@ -2,17 +2,19 @@
 
 Source review date: 2026-09-30. Author/title identity update: 2026-09-30. This reference describes the current backend code, not the proposed endpoints in AGENTS.md. Use it with your Android Studio AI to audit networking, screens, reader behavior, retries, and feature availability.
 
+**Public Library validation:** all 92 backend tests passed with none skipped, including real HTTP upload/streaming and private multipart-limit checks, migration/role/progress/cleanup tests, and all prior private regressions. The Maven backend package build passed. No frontend tests or code changes are part of this backend feature.
+
 **Verification scope:** controllers, DTOs, services, repositories, security, OpenAPI annotations, configuration, migrations, existing tests, backend documentation, and the adjacent Angular API service were inspected. The initial request to `http://localhost:8080/v3/api-docs` could not connect. After the author/title identity update, all 74 backend tests passed against an isolated PostgreSQL 18 database (none skipped), including generated OpenAPI/MockMvc contract, migration and concurrency checks. All 13 adjacent Angular tests and its production build passed (existing CSS budget warning). This is local test evidence, not a deployed endpoint or live Google OAuth verification.
 
 ## 1. Project architecture
 
-- This directory is a **backend**, despite its name `android`: Java 25, Spring Boot 4.1.1, Spring MVC, Spring Security, Spring Data JPA/JDBC, PostgreSQL, Flyway V1–V9, springdoc 3.1.0, and PDFBox 3.0.8.
-- Books belong to workspaces. Users are stored in `workspace_users` with email as their account key; there is no separate JPA User/Workspace entity. Signup creates a workspace and its owner.
+- This directory is a **backend**, despite its name `android`: Java 25, Spring Boot 4.1.1, Spring MVC, Spring Security, Spring Data JPA/JDBC, PostgreSQL, Flyway V1–V10, springdoc 3.1.0, and PDFBox 3.0.8.
+- Private books belong to workspaces; public books are global with no workspace owner. Users are stored in `workspace_users` with email as their account key; there is no separate JPA User/Workspace entity. Signup creates a workspace and its owner.
 - `Book` is a JPA entity with an identity-generated numeric ID. Workspace/document/import IDs are UUIDs. Document, progress, account, and import persistence also uses JDBC.
 - Workspace identity and user email come from authentication. Do not send a workspace header or workspaceId to select another tenant.
 - PDFs are private local files behind `FileStorageService`; PostgreSQL contains metadata/references, not PDF binaries. `LOCAL` is the implemented provider; S3 and signed URLs are not implemented.
 - A book can have multiple retained immutable PDF versions, with at most one active version. Public reader endpoints serve only the active version.
-- Reading progress is private per account/book and tied to the active document. Books/PDFs are workspace shared. Drive credentials and import status are account private.
+- Private reading progress is per account/book; public progress is shared per workspace/book, both tied to the active document. Private books/PDFs are workspace shared; public books/PDFs are globally available to authenticated accounts. Drive credentials and import status are account private.
 - The adjacent `../booker-ui` contains Angular 22.2, HttpClient, a PDF.js reader, and upload/progress/Drive integration. These files were inspected for integration conventions, but their runtime behavior was not tested here.
 - No native Android source was identified in this backend. Retrofit, OkHttp, Compose/XML UI, ViewModels, offline cache, and Android feature completeness must be checked in the actual Android Studio project.
 
@@ -20,7 +22,7 @@ Source review date: 2026-09-30. Author/title identity update: 2026-09-30. This r
 
 Default backend base URL: `http://localhost:8080`; deployment can change port/host. Android must use a host reachable from its device/emulator; `localhost` on Android refers to that device. Use HTTPS in deployment.
 
-Business URLs use `/api` with **no `/v1` prefix**. OpenAPI's metadata version `2.0.0` is not a URL prefix.
+Business URLs use `/api` with **no `/v1` prefix**. OpenAPI's metadata version `2.1.0` is not a URL prefix.
 
 Protected operations below accept either:
 
@@ -55,7 +57,7 @@ Swagger workflow:
 
 ## 3. Complete business API inventory
 
-There are **23 business method/path operations**. Search variants are query parameters of one operation.
+There are **35 business method/path operations**: the existing 23 private/authentication/Drive operations plus 12 Public Library operations. Search variants are query parameters of one operation.
 
 | Step | Method | Path | Authentication | Success |
 | --- | --- | --- | --- | --- |
@@ -82,6 +84,18 @@ There are **23 business method/path operations**. Search variants are query para
 | 21 | GET | `/api/integrations/google-drive/picker` | Bearer or Basic | 200 Picker configuration |
 | 22 | POST | `/api/books/{bookId}/document/imports/google-drive` | Bearer or Basic | 202 ImportStatus |
 | 23 | GET | `/api/books/{bookId}/document/imports/{importId}` | Bearer or Basic; import owner | 200 ImportStatus |
+| 24 | GET | `/api/public-books` | Bearer or Basic | 200 BookResponse[] |
+| 25 | GET | `/api/public-books/{bookId}` | Bearer or Basic | 200 BookResponse |
+| 26 | POST | `/api/public-books` | Super Admin | 201 BookResponse |
+| 27 | PUT | `/api/public-books/{bookId}` | Super Admin | 200 BookResponse |
+| 28 | DELETE | `/api/public-books/{bookId}` | Super Admin | 204; file cleanup queued |
+| 29 | POST | `/api/public-books/{bookId}/document` | Super Admin; raw PDF body | 201 DocumentResponse |
+| 30 | GET | `/api/public-books/{bookId}/document` | Bearer or Basic | 200 DocumentResponse |
+| 31 | GET | `/api/public-books/{bookId}/document/content` | Bearer or Basic | 200 PDF / 206 range |
+| 32 | HEAD | `/api/public-books/{bookId}/document/content` | Bearer or Basic | 200 headers |
+| 33 | GET | `/api/public-books/{bookId}/reading-progress` | Workspace account | 200 ReadingProgress |
+| 34 | PUT | `/api/public-books/{bookId}/reading-progress` | Workspace account | 200 ReadingProgress |
+| 35 | GET | `/api/public-books/reading-summaries` | Workspace account | 200 Summary[] |
 
 `bookId` is the numeric `BookResponse.id`, not a UUID. `documentId`, `importId`, operation IDs, and `Idempotency-Key` are UUID strings.
 
@@ -490,7 +504,7 @@ Book/workspace locks serialize quota/document/progress mutations. Progress has a
 | Google OAuth/connection/Picker/queued import/status | Implemented backend; disabled by default; live consent/import not verified in this review |
 | Angular upload/PDF reader/Drive calls | Source present in adjacent client; not runtime verified here |
 | Android upload/reader/local cache/offline sync | No client source here; audit actual Android project |
-| Edit metadata, toggle Book.completed after creation, delete book | **No exposed API** |
+| Edit/delete private books or toggle private Book.completed after creation | **No exposed API**; Super Admin can edit/delete public books |
 | Numeric-ID GET book metadata | Implemented backend API |
 | Delete PDF, list/download/restore historical versions | **No exposed API**, despite retained old versions |
 | S3/R2/MinIO provider or signed URL generation | Not implemented |
@@ -504,7 +518,7 @@ Do not assume a UI control means a persistence API exists. In particular, Book.c
 
 ## 8. Swagger/documentation findings
 
-- `OpenApiConfig` defines title Booker SaaS API/version 2.0.0 and bearerAuth/basicAuth schemes. Protected controller annotations list the two schemes as alternatives; callback is public. Auth operations have a tag but no explicit summaries/error response annotations, so generated Swagger descriptions are less complete than the service behavior documented here.
+- `OpenApiConfig` defines title Booker SaaS API/version 2.1.0 and bearerAuth/basicAuth schemes. Protected controller annotations list the two schemes as alternatives; callback is public. Auth operations have a tag but no explicit summaries/error response annotations, so generated Swagger descriptions are less complete than the service behavior documented here.
 - Book endpoints and SSE have detailed request/response/error annotations. New PDF/progress operations have summaries and selected error annotations; Google endpoints mostly rely on inferred schemas with limited explicit error documentation.
 - Several methods return generic Maps rather than typed response DTOs (tokens are typed, workspace uses explicit Swagger schema overrides). Drive authorizationUrl/connected/Picker field names must be verified against implementation, not assumed from an unconstrained Swagger object.
 - Reading progress PUT explicitly documents 409 as `oneOf ReadingProgress, ApiError`; the Android client must implement both shapes.
@@ -527,7 +541,7 @@ Cross-workspace books/documents/progress must return 404 rather than leak data. 
 
 Use this prompt with this file and the Android project:
 
-> Audit the Android project against api.md. For each of the 23 operations report implemented, partial, missing, intentionally unused, or unverified. Cite networking interface/service/model/ViewModel/screen files and line numbers. Check actual URLs/methods/parameters/headers/body fields/JSON mapping/status handling and user-visible features. Distinguish a backend endpoint's existence from Android feature completion. Do not create or assume APIs absent from api.md. Pay special attention to UUID retry identity, rotating refresh tokens, one-based resume pages, server revision conflicts and both 409 bodies, document replacement, authenticated Range downloads, private offline cache, and browser-cookie-bound Drive OAuth. List concrete gaps and prioritize fixes; do not claim success without code/test evidence.
+> Audit the Android project against api.md. For each of the 35 operations report implemented, partial, missing, intentionally unused, or unverified. Cite networking interface/service/model/ViewModel/screen files and line numbers. Check actual URLs/methods/parameters/headers/body fields/JSON mapping/status handling and user-visible features. Distinguish a backend endpoint's existence from Android feature completion. Do not create or assume APIs absent from api.md. Pay special attention to UUID retry identity, rotating refresh tokens, one-based resume pages, server revision conflicts and both 409 bodies, document replacement, authenticated Range downloads, private offline cache, and browser-cookie-bound Drive OAuth. List concrete gaps and prioritize fixes; do not claim success without code/test evidence.
 
 Manual/integration scenarios:
 
@@ -568,3 +582,16 @@ Existing backend test sources include TokenAuthenticationTest, WorkspaceIsolatio
 | Adjacent Angular integration | `../booker-ui/src/app/reading/document-api.service.ts`, `reading-state.service.ts`, `session.service.ts`, `google-picker.service.ts`, `pdf-reader.ts`, `../booker-ui/src/app/app.routes.ts` |
 
 The author/title identity update changes book DTOs, detail lookup, uniqueness and event snapshots. Other PDF/progress/Drive contracts remain the same. See README.md for the V9 migration preflight and coordinated client deployment.
+
+
+## 12. Public Library — steps 24–35
+
+The complete method-by-method requests, response examples, errors, authorization, workspace progress, raw streaming upload, bootstrap and cleanup contract for steps 24–35 is in [docs/public-library.md](docs/public-library.md). Existing steps 1–23 are unchanged. Every public-library route requires authentication; the word public does not mean anonymous download.
+
+Use SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD for initial system-owner provisioning, then the existing login/refresh/logout flow. No separate admin authentication exists. Public management (create/update/delete/PDF upload) requires that role. Ordinary workspace users can read public books/PDFs and read/update only their current workspace's progress. Super Admin is standalone, has no workspace, and cannot select customer private data or workspace progress.
+
+Public metadata uses the existing BookRequest/BookResponse. Exact author/title pairs are globally unique for public books, independently of private pairs. Public creation has no book quota and emits no private SSE event. Public PDF POST streams application/pdf with fileName query plus Idempotency-Key UUID; there is no private PDF size/page/storage quota on this route. Private multipart upload and its configured limits are unchanged.
+
+Public progress reuses the existing Update/ReadingProgress schemas, math and two 409 shapes, scoped to workspace rather than individual email. Batch summaries reuse Summary. Deletion cascades public metadata/progress and durably queues all document versions for storage cleanup. Public IDs cannot be resolved by private routes, and private IDs cannot be resolved by public routes.
+
+Frontend integration is outside this backend feature; no Android/Angular source was modified.

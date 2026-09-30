@@ -28,7 +28,7 @@ class BookReadingMigrationTest {
             var events = jdbc.queryForList("SELECT * FROM book_events ORDER BY id");
 
             migrate(schema.name(), null);
-            assertEquals(withoutLegacyIdentifier(books), jdbc.queryForList("SELECT * FROM books ORDER BY id"));
+            assertEquals(withoutLegacyIdentifier(books), withoutLegacyIdentifier(jdbc.queryForList("SELECT * FROM books ORDER BY id")));
             assertEquals(events.stream().map(row -> row.get("id")).toList(),
                     jdbc.queryForList("SELECT id FROM book_events ORDER BY id", Long.class));
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM book_documents", Integer.class));
@@ -51,7 +51,7 @@ class BookReadingMigrationTest {
             jdbc.update("DELETE FROM book_documents WHERE id = ?", document);
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM reading_progress", Integer.class));
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM reading_progress_operations", Integer.class));
-            assertEquals(withoutLegacyIdentifier(books), jdbc.queryForList("SELECT * FROM books ORDER BY id"));
+            assertEquals(withoutLegacyIdentifier(books), withoutLegacyIdentifier(jdbc.queryForList("SELECT * FROM books ORDER BY id")));
         });
     }
 
@@ -88,6 +88,7 @@ class BookReadingMigrationTest {
         return books.stream().map(book -> {
             var copy = new java.util.HashMap<>(book);
             copy.remove("isbn");
+            copy.remove("library_type"); copy.remove("created_at"); copy.remove("updated_at");
             return (java.util.Map<String, Object>) copy;
         }).toList();
     }
@@ -128,6 +129,41 @@ class BookReadingMigrationTest {
             assertEquals(progressBefore, jdbc.queryForList("SELECT * FROM reading_progress"));
             jdbc.update("UPDATE books SET title = title || ' (other edition)' WHERE isbn = '1111111111'");
             migrate(schema.name(), null);
+        });
+    }
+
+    @Test void publicLibraryUpgradePreservesPrivateDataAndEnforcesSystemScopes() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "9");
+            var jdbc = schema.jdbc();
+            long privateBook = jdbc.queryForObject("SELECT min(id) FROM books", Long.class);
+            seedProgress(jdbc, privateBook);
+            var privateBooks = withoutLegacyIdentifier(jdbc.queryForList("SELECT * FROM books ORDER BY id"));
+            var documents = jdbc.queryForList("SELECT * FROM book_documents");
+            var progress = jdbc.queryForList("SELECT * FROM reading_progress");
+            var events = jdbc.queryForList("SELECT * FROM book_events ORDER BY id");
+            migrate(schema.name(), null);
+            assertEquals(privateBooks, withoutLegacyIdentifier(jdbc.queryForList("SELECT * FROM books ORDER BY id")));
+            assertEquals(documents, jdbc.queryForList("SELECT * FROM book_documents"));
+            assertEquals(progress, jdbc.queryForList("SELECT * FROM reading_progress"));
+            assertEquals(events, jdbc.queryForList("SELECT * FROM book_events ORDER BY id"));
+            assertEquals("OWNER", jdbc.queryForObject("SELECT role FROM workspace_users WHERE email = 'reader@example.com'", String.class));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM books WHERE library_type <> 'PRIVATE'", Integer.class));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO books (library_type, title, author, publication_date) VALUES ('PRIVATE', 'Invalid', 'Author', '2026')"));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO books (library_type, workspace_id, title, author, publication_date) SELECT 'PUBLIC', workspace_id, 'Invalid', 'Author', '2026' FROM books WHERE id = ?", privateBook));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO workspace_users (email, password_hash, role) VALUES ('invalid@example.com', 'test', 'OWNER')"));
+            long publicBook = jdbc.queryForObject("INSERT INTO books (library_type, title, author, publication_date) VALUES ('PUBLIC', 'Global', 'Author', '2026') RETURNING id", Long.class);
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO books (library_type, title, author, publication_date) VALUES ('PUBLIC', 'Global', 'Author', '2026')"));
+            assertEquals(events, jdbc.queryForList("SELECT * FROM book_events ORDER BY id"));
+            UUID publicDocument = UUID.randomUUID();
+            insertDocument(jdbc, publicBook, publicDocument, "reader@example.com");
+            jdbc.update("INSERT INTO public_reading_progress (workspace_id, book_id, document_id, current_page, max_page_reached, version, last_read_at) SELECT workspace_id, ?, ?, 93, 93, 1, now() FROM books WHERE id = ?", publicBook, publicDocument, privateBook);
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("UPDATE public_reading_progress SET current_page = 145, max_page_reached = 145 WHERE book_id = ?", publicBook));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("UPDATE public_reading_progress SET current_page = 0 WHERE book_id = ?", publicBook));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO public_reading_progress (workspace_id, book_id, document_id, current_page, max_page_reached, version, last_read_at) SELECT workspace_id, book_id, document_id, current_page, max_page_reached, version, last_read_at FROM public_reading_progress"));
+            jdbc.update("DELETE FROM books WHERE id = ?", publicBook);
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM public_reading_progress", Integer.class));
+            assertEquals(progress, jdbc.queryForList("SELECT * FROM reading_progress"));
         });
     }
 

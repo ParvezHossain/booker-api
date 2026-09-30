@@ -1,5 +1,10 @@
 # Booker SaaS: project lifecycle and client implementation brief
 
+For the additive global Public Library, system-owner setup and workspace-shared
+progress, see [docs/public-library.md](docs/public-library.md). The catalogue
+contracts below refer to private workspaces; [api.md](api.md) contains all 35
+business operations. No frontend implementation is part of this backend feature.
+
 This document describes the backend **as implemented in this repository**. Use it
 as a shared contract when building a new Angular or Android client, or redesigning
 an existing one. Sections 1–9 are the common brief. Copy them together with the

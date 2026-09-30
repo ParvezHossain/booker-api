@@ -9,11 +9,26 @@ import java.util.UUID;
 
 public class WorkspacePrincipal extends User {
     private final UUID workspaceId;
+    private final String role;
     public WorkspacePrincipal(String email, String password, UUID workspaceId) {
-        super(email, password, List.of(new SimpleGrantedAuthority("ROLE_OWNER")));
+        this(email, password, workspaceId, "OWNER");
+    }
+    public WorkspacePrincipal(String email, String password, UUID workspaceId, String role) {
+        super(email, password, List.of(new SimpleGrantedAuthority("ROLE_" + role)));
+        this.role = role;
         this.workspaceId = workspaceId;
     }
-    public static UUID currentWorkspace() { return current().workspaceId; }
+    public String getRole() { return role; }
+    public static UUID currentWorkspace() {
+        UUID workspace = current().workspaceId;
+        if (workspace == null) throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "A workspace account is required");
+        return workspace;
+    }
+    public static void requireSuperAdmin() {
+        if (!"SUPER_ADMIN".equals(current().role)) throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "Super Admin access is required");
+    }
     public static String currentEmail() { return current().getUsername(); }
     public static WorkspacePrincipal current() {
         var auth = SecurityContextHolder.getContext().getAuthentication();

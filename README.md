@@ -83,6 +83,30 @@ Store tokens securely and use HTTPS for any non-local deployment.
 HTTP Basic remains supported for existing clients.
 The old shared `admin/admin` API account is no longer available.
 
+## Global Public Library
+
+Authenticated workspaces can read global books without duplicating them into their
+private libraries. Super Admin creates/updates/deletes them at `/api/public-books`
+and uploads PDFs. Public progress is shared by each workspace; private reading
+progress stays account-specific. All public routes require authentication.
+
+For initial setup, set `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD` (12–64
+characters) using a dedicated email, then launch normally. Existing credentials
+are not reset on restart; no signup request can choose this role. Existing
+installations can omit these variables until provisioning. Remove bootstrap
+secrets after setup. Log in through the same `/api/auth/login` endpoint.
+
+Public upload streams a raw application/pdf body and bypasses normal private book,
+file, page and storage quotas; private multipart limits are unchanged. Flyway V10
+extends existing book/document infrastructure and adds workspace progress and
+reliable file cleanup after public deletion. No frontend code is changed.
+
+Public Library validation: all 92 backend tests passed with none skipped, including
+a real HTTP public/private upload-limit check; the backend package build passed.
+
+See [Public Library APIs, setup, schema and examples](docs/public-library.md) and
+[complete 35-operation API inventory](api.md).
+
 ## Upload and read PDFs
 
 Books can now have a private PDF document, uploaded from any authenticated client

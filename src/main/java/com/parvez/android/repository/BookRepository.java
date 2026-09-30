@@ -12,4 +12,9 @@ public interface BookRepository extends JpaRepository<Book, Long> {
     boolean existsByWorkspaceIdAndAuthorAndTitle(UUID workspaceId, String author, String title);
     Optional<Book> findByIdAndWorkspaceId(Long id, UUID workspaceId);
     long countByWorkspaceId(UUID workspaceId);
+    List<Book> findAllByLibraryType(String libraryType);
+    List<Book> findAllByLibraryTypeAndAuthor(String libraryType, String author);
+    List<Book> findAllByLibraryTypeAndTitle(String libraryType, String title);
+    List<Book> findAllByLibraryTypeAndAuthorAndTitle(String libraryType, String author, String title);
+    Optional<Book> findByIdAndLibraryType(long id, String libraryType);
 }

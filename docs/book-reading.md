@@ -1,5 +1,9 @@
 # PDF documents and personal reading progress
 
+This document describes private-library personal progress. The additive global
+Public Library uses workspace-shared progress; see [public-library.md](public-library.md).
+Private PDF limits and API paths remain unchanged.
+
 ## Current book identity update — 2026-09-30
 
 Book metadata now uses numeric id with title/author, publication date, description

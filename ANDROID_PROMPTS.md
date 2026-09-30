@@ -332,6 +332,30 @@ The following JSON is valid OpenAPI format (JSON is also accepted by OpenAPI too
     },
     "/api/books/{bookId}": {
       "get": {"operationId": "getBookById", "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Book"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "400": {"description": "Invalid numeric book ID"}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}]}
+    },
+    "/api/public-books": {
+      "get": {"operationId": "publicListBooks", "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Book"}}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "author", "in": "query", "required": false, "schema": {"type": "string"}}, {"name": "title", "in": "query", "required": false, "schema": {"type": "string"}}], "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector. Exact filters; omit blank values. Unpaginated array."},
+      "post": {"operationId": "publicCreateBook", "responses": {"201": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Book"}}}, "headers": {"Location": {"schema": {"type": "string"}}}}, "400": {"description": "Invalid input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "409": {"description": "Conflict", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BookRequest"}}}}, "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector.  Super Admin only. No book quota. Exact global public author/title pair unique; independent of private pairs."}
+    },
+    "/api/public-books/{bookId}/document": {
+      "post": {"operationId": "publicUploadDocument", "responses": {"201": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Document"}}}, "headers": {"Location": {"schema": {"type": "string"}}}}, "400": {"description": "Invalid input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required for management; workspace account required for progress"}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "415": {"description": "Unsupported or unsafe PDF/media", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "503": {"description": "Unavailable; retry with backoff", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}, {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"name": "fileName", "in": "query", "required": true, "schema": {"type": "string"}}], "description": "Super Admin only; raw application/pdf stream, required fileName and Idempotency-Key UUID. No private file/page/workspace storage quota. Validation and immutable/idempotent replacement remain.", "requestBody": {"required": true, "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}}},
+      "get": {"operationId": "publicGetDocument", "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Document"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}], "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector. "}
+    },
+    "/api/public-books/{bookId}/document/content": {
+      "get": {"operationId": "publicGetDocumentContent", "responses": {"200": {"description": "Success", "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}, "headers": {"Content-Length": {"schema": {"type": "integer", "format": "int64"}}, "Accept-Ranges": {"schema": {"type": "string"}}, "ETag": {"schema": {"type": "string"}}, "Content-Disposition": {"schema": {"type": "string"}}, "Cache-Control": {"schema": {"type": "string"}}, "X-Content-Type-Options": {"schema": {"type": "string"}}}}, "400": {"description": "Invalid input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "409": {"description": "Conflict", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "416": {"description": "Unsatisfiable range; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "503": {"description": "Unavailable; retry with backoff", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "206": {"description": "Partial PDF content", "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}, "headers": {"Content-Length": {"schema": {"type": "integer", "format": "int64"}}, "Accept-Ranges": {"schema": {"type": "string"}}, "ETag": {"schema": {"type": "string"}}, "Content-Disposition": {"schema": {"type": "string"}}, "Cache-Control": {"schema": {"type": "string"}}, "X-Content-Type-Options": {"schema": {"type": "string"}}, "Content-Range": {"schema": {"type": "string"}}}}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}, {"name": "documentId", "in": "query", "required": false, "schema": {"type": "string", "format": "uuid"}}, {"name": "download", "in": "query", "required": false, "schema": {"type": "boolean", "default": false}}, {"name": "Range", "in": "header", "required": false, "schema": {"type": "string", "example": "bytes=0-65535"}}], "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector. Pin active documentId. Authorized byte streaming. A replaced version returns 409. 416 body need not be ApiError."},
+      "head": {"operationId": "publicHeadDocumentContent", "responses": {"200": {"description": "Success", "headers": {"Content-Length": {"schema": {"type": "integer", "format": "int64"}}, "Accept-Ranges": {"schema": {"type": "string"}}, "ETag": {"schema": {"type": "string"}}, "Content-Disposition": {"schema": {"type": "string"}}, "Cache-Control": {"schema": {"type": "string"}}, "X-Content-Type-Options": {"schema": {"type": "string"}}}}, "400": {"description": "Invalid input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "409": {"description": "Conflict", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "503": {"description": "Unavailable; retry with backoff", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}, {"name": "documentId", "in": "query", "required": false, "schema": {"type": "string", "format": "uuid"}}, {"name": "download", "in": "query", "required": false, "schema": {"type": "boolean", "default": false}}], "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector. No response body. Ignores Range and returns full file length."}
+    },
+    "/api/public-books/{bookId}/reading-progress": {
+      "get": {"operationId": "publicGetReadingProgress", "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReadingProgress"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}], "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector.  All teammates share state; standalone Super Admin has no workspace and receives 403."},
+      "put": {"operationId": "publicUpdateReadingProgress", "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReadingProgress"}}}}, "400": {"description": "Invalid input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "409": {"description": "Revision conflict (ReadingProgress), or replaced document/reused operation (ApiError)", "content": {"application/json": {"schema": {"oneOf": [{"$ref": "#/components/schemas/ReadingProgress"}, {"$ref": "#/components/schemas/ApiError"}]}}}}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProgressUpdate"}}}}, "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector. Exact successful-operation replay returns current state. Stale revision can merge max page while preserving resume/time. Never silently overwrite on conflict. All teammates share state; standalone Super Admin has no workspace and receives 403."}
+    },
+    "/api/public-books/reading-summaries": {
+      "get": {"operationId": "publicGetReadingSummaries", "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/ReadingSummary"}}}}}, "400": {"description": "Invalid input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "bookIds", "in": "query", "required": true, "schema": {"type": "array", "items": {"type": "integer", "format": "int64"}, "minItems": 1, "maxItems": 100}, "style": "form", "explode": false}], "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector. Comma-separated IDs; any inaccessible book causes 404; no-document entries have null document and progress."}
+    },
+    "/api/public-books/{bookId}": {
+      "get": {"operationId": "publicGetBookById", "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Book"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "400": {"description": "Invalid numeric book ID"}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}], "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector. "},
+      "put": {"operationId": "updatePublicBook", "responses": {"400": {"description": "Invalid input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "409": {"description": "Conflict", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required"}, "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Book"}}}}, "404": {"description": "Public book not found"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BookRequest"}}}}, "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector.  Super Admin only. No book quota. Exact global public author/title pair unique; independent of private pairs.", "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}]},
+      "delete": {"operationId": "deletePublicBook", "description": "Super Admin only. Hard deletion queues every retained file for durable asynchronous cleanup; metadata/workspace progress cascade. Private IDs return 404.", "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}], "responses": {"204": {"description": "Removed; cleanup queued"}, "401": {"description": "Authentication required"}, "403": {"description": "Super Admin required"}, "404": {"description": "Public book not found"}}}
     }
   },
   "components": {
@@ -526,3 +550,358 @@ Poll that authorized path. Success has status COMPLETED and documentId; failure 
 - [ ] Cross-workspace/account, malicious/error, large-file and lifecycle cases covered.
 - [ ] Build/test commands and actual results recorded; untested Google/device/deployment items disclosed.
 - [ ] No unsupported edit/delete/pagination/push/password-reset/billing actions presented as working.
+
+
+
+
+
+
+Public Library Backend/API Feature
+
+## Feature: Public Library — Backend/API Only
+
+### Context
+
+Currently, all book/library data in the SaaS application is private and scoped to individual workspaces.
+
+We now need to introduce a new **Public Library** that exists alongside the existing **Private Library**.
+
+This task is **backend/API only**.
+
+The APIs will be consumed by:
+
+- Android applications
+- Angular applications
+
+**Do not implement or modify any frontend UI/UX, Angular components, Android code, screens, navigation, or client-side functionality.**
+
+---
+
+## 1\. Library Types
+
+The system should support two library types:
+
+### Private Library
+
+- Existing functionality.
+- Books belong to a specific workspace.
+- Access remains restricted to that workspace.
+- Do not break or change the existing Private Library behavior.
+
+### Public Library
+
+- A global/system-wide library.
+- Public books are managed by the SaaS Super Admin.
+- All authorized workspace users should be able to access and read public books.
+- Public books should not need to be duplicated into individual workspaces.
+
+---
+
+## 2\. Super Admin
+
+Introduce/support a **Super Admin** role representing the system owner/administrator of the SaaS product.
+
+Requirements:
+
+- A Super Admin should be created during the initial project setup/launch.
+- Super Admin has system-level privileges.
+- Super Admin can create Public Library books.
+- Super Admin can update Public Library books.
+- Super Admin can delete/remove Public Library books where appropriate.
+- Super Admin can upload a PDF associated with each public book.
+- There should be **no book/PDF upload limitation** for the Super Admin.
+
+Use the existing authentication and authorization architecture if one already exists. Do not introduce a separate authentication mechanism unnecessarily.
+
+---
+
+## 3\. Public Library API
+
+Expose backend APIs required by Android and Angular clients to consume the Public Library.
+
+The APIs should support at minimum:
+
+- List public books.
+- Retrieve public book details.
+- Create a public book — Super Admin only.
+- Update a public book — Super Admin only.
+- Delete/archive a public book — Super Admin only.
+- Upload/replace the PDF associated with a public book — Super Admin only.
+- Retrieve/access the PDF through the appropriate existing file/storage mechanism.
+- Retrieve reading progress for public books for the current workspace.
+- Update reading progress for a public book.
+
+Follow the existing API conventions, routing patterns, authentication mechanisms, response structures, validation, pagination, and error-handling patterns already present in the project.
+
+Do not invent a new API style if the project already has an established one.
+
+---
+
+## 4\. Workspace-Level Reading Progress
+
+Public books are global, but reading progress must be tracked **separately for each workspace**.
+
+For each combination of:
+
+- Workspace
+- Public Book
+
+store the reading progress.
+
+Example:
+
+```
+Public Book: Book A
+
+Workspace A → 75%
+Workspace B → 40%
+Workspace C → 100%
+```
+
+Progress from one workspace must never affect another workspace.
+
+### Important
+
+If the existing system already has user-level reading-progress functionality, inspect and understand it first.
+
+Determine whether the new requirement should:
+
+- extend the existing progress model,
+- introduce a workspace-level progress model,
+- or adapt the existing architecture.
+
+Avoid creating duplicate/conflicting reading-progress mechanisms.
+
+The API should allow the client to:
+
+- Get the current workspace's progress for a public book.
+- Update the current workspace's progress.
+- Retrieve public books together with the current workspace's progress where appropriate.
+
+Reading progress must be validated so that invalid values cannot be stored.
+
+For example:
+
+- Minimum: `0%`
+- Maximum: `100%`
+
+Use the project's existing conventions for representing percentages/progress if one already exists.
+
+---
+
+## 5\. Authorization & Data Isolation
+
+Implement strict authorization rules.
+
+### Super Admin
+
+Can:
+
+- Manage Public Library books.
+- Upload/manage public PDFs.
+- Access system-level public-library management APIs.
+
+### Workspace Users
+
+Can:
+
+- Read/list Public Library books.
+- Access public book PDFs according to the existing authentication rules.
+- Read/update reading progress for their current workspace.
+
+Workspace users **cannot**:
+
+- Create public books.
+- Modify public books.
+- Delete public books.
+- Upload/replace public PDFs.
+- Access another workspace's reading progress.
+
+A workspace user must only be able to read or modify progress belonging to their currently authenticated workspace.
+
+Do not weaken any existing workspace isolation or authorization rules.
+
+---
+
+## 6\. Database / Data Model
+
+Inspect the existing database schema and determine the appropriate changes.
+
+The implementation should clearly distinguish:
+
+```
+Private Book
+    → Workspace scoped
+
+Public Book
+    → System/global scoped
+```
+
+Public books should not require a `workspace_id` if the existing architecture supports a proper global/system-level entity.
+
+Reading progress should be associated with:
+
+```
+workspace_id
+public_book_id
+progress
+```
+
+Add appropriate:
+
+- Foreign keys
+- Unique constraints
+- Indexes
+- Cascading/restrict behavior
+- Timestamps
+- Soft-delete behavior, if that is already used by the project
+
+Avoid unnecessary schema duplication.
+
+---
+
+## 7\. PDF/File Handling
+
+Reuse the existing PDF/file storage infrastructure if available.
+
+For Public Library PDFs:
+
+- Super Admin can upload PDFs without the normal workspace book-upload limitation.
+- The PDF must be associated with the correct public book.
+- Replacing a PDF should be handled safely.
+- Deleting/archiving a public book should correctly handle its associated file according to existing storage conventions.
+- Validate uploaded files using the existing application rules where applicable.
+- Do not expose private/workspace files through public-library APIs.
+
+Do not create a second file-storage mechanism unless the existing infrastructure cannot support this requirement.
+
+---
+
+## 8\. Backward Compatibility
+
+This feature must not break the existing Private Library.
+
+Before implementation:
+
+- Inspect the current Book/Library models.
+- Inspect workspace relationships.
+- Inspect PDF/file upload logic.
+- Inspect existing reading-progress logic.
+- Inspect authentication and authorization.
+- Inspect existing API endpoints and conventions.
+
+Existing private books must continue to behave exactly as before.
+
+Existing APIs should not be unnecessarily changed or broken.
+
+If an existing API needs modification to support the new functionality, maintain backward compatibility where practical.
+
+---
+
+## 9\. API Design
+
+Before implementing, identify the API endpoints that are required based on the project's existing conventions.
+
+For each endpoint, consider:
+
+- HTTP method
+- Route
+- Authentication requirements
+- Authorization requirements
+- Request parameters/body
+- Validation
+- Response format
+- Pagination
+- Error responses
+- Workspace context
+- Super Admin requirements
+
+Follow the existing project's API naming and response conventions rather than imposing a new convention.
+
+---
+
+## 10\. Testing
+
+Add backend tests covering at minimum:
+
+### Public Book
+
+- Super Admin can create a public book.
+- Non-Super Admin cannot create a public book.
+- Super Admin can update a public book.
+- Non-Super Admin cannot update a public book.
+- Super Admin can delete/archive a public book.
+- Non-Super Admin cannot delete/archive a public book.
+- Super Admin can upload a public PDF.
+- Public books can be retrieved by authorized workspace users.
+
+### Workspace Isolation
+
+- Workspace A cannot access Workspace B's reading progress.
+- Workspace A can only update its own reading progress.
+- Public books are accessible across workspaces.
+- Private books remain workspace-isolated.
+
+### Reading Progress
+
+- Progress can be created.
+- Existing progress can be updated.
+- Progress is isolated by workspace.
+- Progress cannot be less than `0`.
+- Progress cannot exceed `100`.
+- A workspace can reach `100%` completion.
+- Progress for one workspace does not affect another workspace.
+
+### Regression
+
+Run the existing test suite to ensure Private Library functionality continues to work.
+
+---
+
+## 11\. Implementation Approach
+
+Before writing code:
+
+1. Inspect the existing project architecture.
+2. Identify the authentication/authorization implementation.
+3. Identify the Super Admin/system-admin role implementation, if one already exists.
+4. Inspect the Book/Library models.
+5. Inspect workspace relationships.
+6. Inspect PDF/file storage and upload logic.
+7. Inspect reading-progress implementation.
+8. Inspect existing API patterns.
+9. Determine the minimum required database/schema changes.
+10. Implement the feature using existing architectural patterns.
+
+Then implement the complete backend functionality.
+
+After implementation:
+
+- Run database migrations/schema checks.
+- Run unit/integration/API tests.
+- Run lint/static analysis if available.
+- Run the backend build.
+- Fix any errors or regressions introduced by the implementation.
+
+### Important Constraints
+
+- **Backend/API only.**
+- **Do not modify Angular code.**
+- **Do not modify Android code.**
+- **Do not implement UI/UX.**
+- **Do not create frontend components/screens.**
+- Reuse existing authentication, authorization, storage, database, and API patterns wherever possible.
+- Preserve all existing Private Library functionality.
+- Keep Public Library data globally accessible while keeping reading progress workspace-specific.
+
+## Public Library implementation contract
+
+The backend implementation for the feature above is documented in
+[docs/public-library.md](docs/public-library.md); the full inventory in
+[api.md](api.md) now includes 35 business operations (23 existing + 12 public).
+Super Admin uses the existing login flow and is provisioned with initial setup
+secrets. Public progress is workspace-shared; private progress remains personal.
+Public PDF upload uses a raw application/pdf stream to bypass private multipart
+limits while reusing existing secure storage and validation. There is no frontend
+implementation in this backend task. The user-authored feature requirements above
+are preserved.

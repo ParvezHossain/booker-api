@@ -19,75 +19,96 @@ public class ReadingProgressService {
     public ReadingProgressService(BookAccess access, BookDocumentRepository documents, JdbcTemplate jdbc) {
         this.access = access; this.documents = documents; this.jdbc = jdbc;
     }
+    private enum Scope {
+        ACCOUNT("reading_progress", "reading_progress_operations", "user_email"),
+        WORKSPACE("public_reading_progress", "public_reading_progress_operations", "workspace_id");
+        final String table, operations, identity;
+        Scope(String table, String operations, String identity) {
+            this.table = table; this.operations = operations; this.identity = identity;
+        }
+        Object owner() { return this == ACCOUNT ? WorkspacePrincipal.currentEmail() : WorkspacePrincipal.currentWorkspace(); }
+    }
     @Transactional(readOnly = true)
-    public ReadingProgress get(long bookId) {
-        access.require(bookId);
-        return progress(active(bookId));
+    public ReadingProgress get(long bookId) { return get(bookId, Scope.ACCOUNT); }
+    @Transactional(readOnly = true)
+    public ReadingProgress getPublic(long bookId) { return get(bookId, Scope.WORKSPACE); }
+    private ReadingProgress get(long bookId, Scope scope) {
+        scope.owner();
+        if (scope == Scope.ACCOUNT) access.require(bookId); else access.requirePublic(bookId);
+        return progress(active(bookId), scope);
     }
     private BookDocument active(long bookId) {
         return documents.active(bookId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Book has no PDF"));
     }
-    private ReadingProgress progress(BookDocument doc) {
-        return jdbc.query("SELECT * FROM reading_progress WHERE user_email = ? AND book_id = ? AND document_id = ?",
+    private ReadingProgress progress(BookDocument doc, Scope scope) {
+        return jdbc.query("SELECT * FROM " + scope.table + " WHERE " + scope.identity + " = ? AND book_id = ? AND document_id = ?",
                 (rs, row) -> ReadingProgress.of(doc.bookId(), doc.id(), rs.getInt("current_page"), doc.pageCount(),
                         rs.getInt("max_page_reached"), rs.getTimestamp("last_read_at").toInstant(), rs.getLong("version")),
-                WorkspacePrincipal.currentEmail(), doc.bookId(), doc.id()).stream().findFirst()
+                scope.owner(), doc.bookId(), doc.id()).stream().findFirst()
                 .orElseGet(() -> ReadingProgress.of(doc.bookId(), doc.id(), 0, doc.pageCount(), 0, null, 0));
     }
     @Transactional
-    public UpdateResult update(long bookId, Update request) {
-        access.lock(bookId);
+    public UpdateResult update(long bookId, Update request) { return update(bookId, request, Scope.ACCOUNT); }
+    @Transactional
+    public UpdateResult updatePublic(long bookId, Update request) { return update(bookId, request, Scope.WORKSPACE); }
+    private UpdateResult update(long bookId, Update request, Scope scope) {
+        Object owner = scope.owner();
+        if (scope == Scope.ACCOUNT) access.lock(bookId); else access.lockPublic(bookId);
         var doc = active(bookId);
         if (!doc.id().equals(request.documentId())) throw new ResponseStatusException(HttpStatus.CONFLICT, "The PDF was replaced; reopen the book");
         if (request.currentPage() < 1 || request.currentPage() > doc.pageCount())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "currentPage must be between 1 and totalPages");
-        String email = WorkspacePrincipal.currentEmail();
-        var oldOperations = jdbc.queryForList("SELECT * FROM reading_progress_operations WHERE user_email = ? AND operation_id = ?",
-                email, request.operationId());
+        var oldOperations = jdbc.queryForList("SELECT * FROM " + scope.operations + " WHERE " + scope.identity + " = ? AND operation_id = ?",
+                owner, request.operationId());
         if (!oldOperations.isEmpty()) {
             var old = oldOperations.getFirst();
             if (((Number) old.get("book_id")).longValue() != bookId || !old.get("document_id").equals(request.documentId())
                     || ((Number) old.get("current_page")).intValue() != request.currentPage()
                     || ((Number) old.get("expected_version")).longValue() != request.version())
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Operation ID was already used for a different update");
-            return new UpdateResult(progress(doc), false);
+            return new UpdateResult(progress(doc, scope), false);
         }
-        var current = progress(doc);
+        var current = progress(doc, scope);
         if (current.version() != request.version()) {
             // Preserve resume position; merging the maximum does not claim a new reading timestamp.
             if (request.version() < current.version() && request.currentPage() > current.pagesRead())
-                jdbc.update("UPDATE reading_progress SET max_page_reached = ?, version = version + 1, updated_at = now() WHERE user_email = ? AND book_id = ? AND document_id = ?",
-                        request.currentPage(), email, bookId, doc.id());
-            return new UpdateResult(progress(doc), true);
+                jdbc.update("UPDATE " + scope.table + " SET max_page_reached = ?, version = version + 1, updated_at = now() WHERE " + scope.identity + " = ? AND book_id = ? AND document_id = ?",
+                        request.currentPage(), owner, bookId, doc.id());
+            return new UpdateResult(progress(doc, scope), true);
         }
         jdbc.update("""
-                INSERT INTO reading_progress (user_email, book_id, document_id, current_page, max_page_reached, version, last_read_at)
+                INSERT INTO %s (%s, book_id, document_id, current_page, max_page_reached, version, last_read_at)
                 VALUES (?, ?, ?, ?, ?, 1, now())
-                ON CONFLICT (user_email, book_id) DO UPDATE SET document_id = EXCLUDED.document_id,
+                ON CONFLICT (%s, book_id) DO UPDATE SET document_id = EXCLUDED.document_id,
                     current_page = EXCLUDED.current_page, max_page_reached = EXCLUDED.max_page_reached,
-                    version = CASE WHEN reading_progress.document_id = EXCLUDED.document_id THEN reading_progress.version + 1 ELSE 1 END,
+                    version = CASE WHEN %s.document_id = EXCLUDED.document_id THEN %s.version + 1 ELSE 1 END,
                     last_read_at = now(), updated_at = now()
-                """, email, bookId, doc.id(), request.currentPage(), Math.max(current.pagesRead(), request.currentPage()));
-        jdbc.update("INSERT INTO reading_progress_operations (user_email, operation_id, book_id, document_id, current_page, expected_version) VALUES (?, ?, ?, ?, ?, ?)",
-                email, request.operationId(), bookId, doc.id(), request.currentPage(), request.version());
-        return new UpdateResult(progress(doc), false);
+                """.formatted(scope.table, scope.identity, scope.identity, scope.table, scope.table),
+                owner, bookId, doc.id(), request.currentPage(), Math.max(current.pagesRead(), request.currentPage()));
+        jdbc.update("INSERT INTO " + scope.operations + " (" + scope.identity + ", operation_id, book_id, document_id, current_page, expected_version) VALUES (?, ?, ?, ?, ?, ?)",
+                owner, request.operationId(), bookId, doc.id(), request.currentPage(), request.version());
+        return new UpdateResult(progress(doc, scope), false);
     }
     @Transactional(readOnly = true)
-    public List<Summary> summaries(List<Long> bookIds) {
+    public List<Summary> summaries(List<Long> bookIds) { return summaries(bookIds, Scope.ACCOUNT); }
+    @Transactional(readOnly = true)
+    public List<Summary> summariesPublic(List<Long> bookIds) { return summaries(bookIds, Scope.WORKSPACE); }
+    private List<Summary> summaries(List<Long> bookIds, Scope scope) {
+        Object owner = scope.owner();
         if (bookIds.isEmpty() || bookIds.size() > 100) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Supply 1–100 book IDs");
         var ids = bookIds.stream().distinct().toList();
         String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
         var parameters = new java.util.ArrayList<Object>();
-        parameters.add(WorkspacePrincipal.currentEmail());
-        parameters.add(WorkspacePrincipal.currentWorkspace());
+        parameters.add(owner);
+        if (scope == Scope.ACCOUNT) parameters.add(WorkspacePrincipal.currentWorkspace());
         parameters.addAll(ids);
         var result = jdbc.query("""
                 SELECT b.id AS book_id, d.id AS document_id, d.original_file_name, d.file_size, d.page_count,
                        d.checksum, d.source_type, d.created_at, p.current_page, p.max_page_reached, p.last_read_at, p.version
                 FROM books b LEFT JOIN book_documents d ON d.book_id = b.id AND d.active
-                LEFT JOIN reading_progress p ON p.book_id = b.id AND p.document_id = d.id AND p.user_email = ?
-                WHERE b.workspace_id = ? AND b.id IN (
-                """ + placeholders + ") ORDER BY b.id", (rs, row) -> {
+                LEFT JOIN %s p ON p.book_id = b.id AND p.document_id = d.id AND p.%s = ?
+                WHERE %s AND b.id IN (
+                """.formatted(scope.table, scope.identity, scope == Scope.ACCOUNT ? "b.workspace_id = ?" : "b.library_type = 'PUBLIC'") + placeholders + ") ORDER BY b.id", (rs, row) -> {
             long id = rs.getLong("book_id");
             UUID document = rs.getObject("document_id", UUID.class);
             if (document == null) return new Summary(id, null, null);

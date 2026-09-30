@@ -30,8 +30,8 @@ public class WorkspaceAccounts implements UserDetailsService {
     }
     @Override
     public UserDetails loadUserByUsername(String email) {
-        return jdbc.query("SELECT email, password_hash, workspace_id FROM workspace_users WHERE email = ?",
-                (rs, row) -> new WorkspacePrincipal(rs.getString(1), rs.getString(2), rs.getObject(3, UUID.class)),
+        return jdbc.query("SELECT email, password_hash, workspace_id, role FROM workspace_users WHERE email = ?",
+                (rs, row) -> new WorkspacePrincipal(rs.getString(1), rs.getString(2), rs.getObject(3, UUID.class), rs.getString(4)),
                 email.strip().toLowerCase(Locale.ROOT)).stream().findFirst()
                 .orElseThrow(() -> new UsernameNotFoundException("Invalid credentials"));
     }
@@ -43,6 +43,20 @@ public class WorkspaceAccounts implements UserDetailsService {
         jdbc.update("INSERT INTO workspace_users (email, password_hash, workspace_id) VALUES (?, ?, ?)",
                 email, passwords.encode(request.password()), id);
         return Map.of("workspaceId", id, "workspaceName", request.workspaceName().strip(), "email", email, "plan", "FREE");
+    }
+    @Transactional
+    public void provisionSuperAdmin(String email, String password) {
+        String normalized = email.strip().toLowerCase(Locale.ROOT);
+        // Serialize initial setup across replicas; never promote an existing owner or reset a password.
+        jdbc.execute("SELECT pg_advisory_xact_lock(834872910)");
+        var existing = jdbc.queryForList("SELECT role FROM workspace_users WHERE email = ?", String.class, normalized);
+        if (!existing.isEmpty()) {
+            if (!"SUPER_ADMIN".equals(existing.getFirst()))
+                throw new IllegalStateException("Super Admin bootstrap email is already registered as a workspace account");
+            return;
+        }
+        jdbc.update("INSERT INTO workspace_users (email, password_hash, workspace_id, role) VALUES (?, ?, NULL, 'SUPER_ADMIN')",
+                normalized, passwords.encode(password));
     }
     public Map<String, Object> current() {
         return jdbc.queryForMap("SELECT id, name, plan, book_limit, (SELECT count(*) FROM books WHERE workspace_id = w.id) AS books_used FROM workspaces w WHERE id = ?",

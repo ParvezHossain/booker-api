@@ -17,7 +17,13 @@ public class Book {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "workspace_id", nullable = false)
+    @Column(name = "library_type", nullable = false, length = 10)
+    private String libraryType = "PRIVATE";
+
+    public String getLibraryType() { return libraryType; }
+    public void setLibraryType(String libraryType) { this.libraryType = libraryType; }
+
+    @Column(name = "workspace_id")
     private java.util.UUID workspaceId;
     public java.util.UUID getWorkspaceId() { return workspaceId; }
     public void setWorkspaceId(java.util.UUID workspaceId) { this.workspaceId = workspaceId; }

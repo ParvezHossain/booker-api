@@ -50,7 +50,9 @@ public class GlobalExceptionHandler {
 
         String message = "The requested operation violates a database constraint";
 
-        if (isDuplicateBook(exception)) {
+        if (hasConstraint(exception, "uk_books_public_author_title")) {
+            message = "A book with this author and title already exists in the public library";
+        } else if (hasConstraint(exception, "uk_books_workspace_author_title")) {
             message = "A book with this author and title already exists in your workspace";
         }
 
@@ -118,6 +120,11 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Unsupported content type", request);
     }
 
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    public ResponseEntity<ApiError> handleMissingRoute(HttpServletRequest request) {
+        return buildError(HttpStatus.NOT_FOUND, "Resource not found", request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleGenericException(
             Exception exception,
@@ -160,8 +167,8 @@ public class GlobalExceptionHandler {
                 .body(error);
     }
 
-    private boolean isDuplicateBook(
-            DataIntegrityViolationException exception
+    private boolean hasConstraint(
+            DataIntegrityViolationException exception, String constraint
     ) {
 
         Throwable cause = exception;
@@ -172,7 +179,7 @@ public class GlobalExceptionHandler {
 
             if (message != null &&
                     message.toLowerCase()
-                            .contains("uk_books_workspace_author_title")) {
+                            .contains(constraint)) {
                 return true;
             }
 
