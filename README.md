@@ -109,7 +109,7 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/workspac
 # Create a book.
 curl -i -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books \
   -H 'Content-Type: application/json' \
-  -d '{"isbn":"9780134685991","title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018","description":"Java best practices","completed":false}'
+  -d '{"title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018","description":"Java best practices","completed":false}'
 
 # List books.
 curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books
@@ -119,30 +119,30 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" --get http://localhost:8080/api/bo
   --data-urlencode 'author=Joshua Bloch' --data-urlencode 'title=Effective Java'
 
 # Retrieve one book.
-curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books/isbn/9780134685991
+curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books/1
 
 # Stream your workspace's events; replay from the beginning.
 curl -N -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books/events \
   -H 'Accept: text/event-stream' -H 'Last-Event-ID: 0'
 ```
 
-ISBN must be 10 or 13 digits. Title and author are required (maximum 255
+Title and author are required (maximum 255
 characters); publication date is a required string (maximum 20 characters),
 and description is optional (maximum 5,000 characters). Creation returns 201
-with a usable `Location` header. An ISBN is unique within a workspace; separate
-workspaces may store the same ISBN. New workspaces start empty.
+with a usable `Location` header. The exact, case-sensitive author/title pair is unique within a workspace; separate
+workspaces may store the same pair. New workspaces start empty.
 
 | Status | Meaning |
 | --- | --- |
 | 400 | Invalid JSON, fields, or event cursor |
 | 401 | Missing or incorrect credentials |
 | 403 | Workspace book limit reached, or endpoint access denied |
-| 404 | ISBN does not exist in your workspace |
-| 409 | Duplicate email or workspace ISBN |
+| 404 | Book ID does not exist in your workspace |
+| 409 | Duplicate email or workspace author/title pair |
 | 503 | Notification connection capacity reached |
 
 Workspace identity comes from the authenticated account, never a client-supplied
-workspace header. Search, ISBN lookup and event replay are scoped to that identity.
+workspace header. Search, numeric book-ID lookup and event replay are scoped to that identity.
 Book limits are checked under a database row lock to serialize concurrent creates
 for a workspace. Book insert and notification creation commit together.
 
@@ -221,6 +221,41 @@ WHERE id = 'replace-with-workspace-uuid';
 ```
 
 There is deliberately no customer endpoint for granting paid entitlements.
+
+## Author/title book identity upgrade
+
+Books are identified by numeric `id`. Create requests and responses contain
+`title`, `author`, `publishedDate`, `description`, and `completed`; detail lookup
+is `GET /api/books/{bookId}`. Creation's Location points to that lookup.
+The exact, case-sensitive `(workspace_id, author, title)` combination is unique.
+The same author may have multiple titles and different authors may share a title.
+
+This changes the previous book API contract. Update clients together with the
+backend; Swagger metadata is version 2.0.0 and book-created payloads use
+schemaVersion 2. Retained notification snapshots use the same field set as new
+ones, while event IDs/order/cursors stay stable. See [all API contracts](api.md)
+and [Android implementation prompts](ANDROID_PROMPTS.md).
+
+Flyway V9 preserves numeric book IDs, document/progress references and existing
+metadata, removes the previous identifier column, and adds the new unique
+constraint. V1–V8 remain unchanged to preserve installed migration checksums.
+Back up the database before upgrade. Check existing duplicate pairs first:
+
+```sql
+SELECT workspace_id, author, title, count(*) AS duplicates, array_agg(id ORDER BY id) AS book_ids
+FROM books GROUP BY workspace_id, author, title HAVING count(*) > 1;
+```
+
+If duplicates exist, V9 stops transactionally with a clear message. Resolve them
+explicitly (for example, distinguish edition titles) before rerunning; it never
+silently merges/deletes books or their PDFs/progress. Back up/export the retired
+identifier data if it is needed for audit. There is no down migration; restoring
+removed values requires the pre-upgrade backup. Updating retained event payloads
+can be substantial on a large log; schedule an appropriate maintenance window.
+
+Identity-update validation: all 74 backend tests passed against an isolated
+PostgreSQL 18 database with none skipped; all 13 Angular tests and the production
+build passed (existing CSS budget warning).
 
 ## Upgrade an existing installation
 

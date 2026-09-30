@@ -38,16 +38,15 @@ public class BookService {
 
     @Transactional
     public BookResponse createBook(@Valid BookRequest request) {
-        if (bookRepository.existsByWorkspaceIdAndIsbn(workspace(), request.isbn())) {
-            throw new BookAlreadyExistsException("Book already exists with isbn: " + request.isbn());
-        }
         int limit = jdbc.queryForObject("SELECT book_limit FROM workspaces WHERE id = ? FOR UPDATE", Integer.class, workspace());
+        if (bookRepository.existsByWorkspaceIdAndAuthorAndTitle(workspace(), request.author(), request.title())) {
+            throw new BookAlreadyExistsException("A book with this author and title already exists in your workspace");
+        }
         if (bookRepository.countByWorkspaceId(workspace()) >= limit) {
             throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, "Workspace book limit reached");
         }
         Book book = new Book();
         book.setWorkspaceId(workspace());
-        book.setIsbn(request.isbn());
         book.setTitle(request.title());
         book.setAuthor(request.author());
         book.setPublishedDate(request.publishedDate());
@@ -58,8 +57,8 @@ public class BookService {
         return bookMapper.toBookResponse(savedBook);
     }
 
-    public BookResponse getBookByISBN(String isbn) {
-        return bookRepository.findByWorkspaceIdAndIsbn(workspace(), isbn).map(bookMapper::toBookResponse)
+    public BookResponse getBookById(long bookId) {
+        return bookRepository.findByIdAndWorkspaceId(bookId, workspace()).map(bookMapper::toBookResponse)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "Book not found"));
     }
 

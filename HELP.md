@@ -24,21 +24,22 @@ Build these screens:
 - Sign in: email and password.
 - Library: book list, exact author/title filters, loading/empty/error states.
 - Create book: validated form and success/error feedback.
-- Book details: retrieve by ISBN, display all returned fields.
+- Book details: retrieve by numeric book ID, display all returned fields.
 - Workspace: name, plan, books used, book limit and remaining capacity.
 - Connection feedback: live, reconnecting or offline status where useful.
 
 The following features are **not supported by the current backend**: book editing,
 deleting, toggling completion after creation, server pagination/sorting, fuzzy or
 full-text search, team invitations, workspace switching, password reset/change,
-email verification, JWT/OAuth, token refresh, server logout, billing/checkout,
-file/image uploads, and background push notifications. Do not build working-looking
+email verification, billing/checkout, image uploads, and background push notifications.
+JWT login/refresh/logout, PDF uploads/reading/progress and Google Drive OAuth/import
+are supported; see api.md for the complete 23-operation contract. Do not build working-looking
 controls that call invented endpoints. If a redesign needs these features, list
 them as backend work separately.
 
 `completed` is accepted when creating a book and displayed afterward. There is no
-endpoint to change it. Duplicate titles are allowed. ISBN uniqueness is scoped
-to a workspace.
+endpoint to change it. The exact, case-sensitive author/title pair is unique per workspace. Authors may have
+multiple titles and different authors may share a title.
 
 ## 2. Backend startup, runtime and shutdown lifecycle
 
@@ -48,11 +49,14 @@ to a workspace.
 2. Spring loads environment-backed properties and creates the web application
    context, datasource, security, controller, service and repository beans.
 3. Flyway validates and applies pending migrations in order:
-   - V1 creates `books` with the original global ISBN constraint.
+   - V1 creates the original `books` schema (preserved historical migration).
    - V2 inserts sample books.
    - V3 creates the durable event log, transactional cursor and insert trigger.
    - V4 creates workspaces/users, assigns existing books/events to the legacy
-     workspace, makes ISBN uniqueness workspace-specific and updates the trigger.
+     workspace, adds tenant ownership/uniqueness and updates the trigger (historical schema).
+   - V5 adds refresh sessions; V6–V8 add PDFs, personal progress, Drive and indexes.
+   - V9 removes the old book identifier field, adds exact workspace/author/title
+     uniqueness, and upgrades notification snapshots to schemaVersion 2.
 4. Hibernate validates the database schema; it does not create or update it.
 5. The embedded server exposes the API, public Swagger documentation and health
    endpoint. A database or migration failure can prevent successful startup.
@@ -89,11 +93,11 @@ the transaction rolls back both inserts. The response contains no password or to
 
 ### Create-book transaction
 
-The service checks the authenticated workspace for a duplicate ISBN, locks that
-workspace's row while checking its quota, assigns the workspace internally and
+The service locks the authenticated workspace row, checks for a duplicate
+author/title pair and checks its quota, assigns the workspace internally and
 inserts the book. A PostgreSQL trigger writes a snapshot `book.created` event in
 the same transaction. Commit makes the book and event visible together; rollback
-leaves neither. The database's workspace/ISBN constraint also protects against
+leaves neither. The database's workspace/author/title constraint also protects against
 concurrent duplicate inserts. A global transactional event counter preserves
 commit ordering and serializes event allocation across writers.
 
@@ -150,7 +154,7 @@ Do not interpret every 403 as invalid credentials: book creation uses 403 for qu
 ### Normal use, logout and account changes
 
 Load workspace usage and books. Allow exact author/title searches, book detail
-navigation by ISBN and creation within the reported limit. After creation, merge
+navigation by numeric book ID and creation within the reported limit. After creation, merge
 the returned book by its ID and refresh workspace usage. A subsequent SSE event
 for the same book must not create a second row or count it twice.
 
@@ -163,8 +167,8 @@ cached data or cursor for another.
 After a refresh or app restart, if credentials are not retained, request sign in
 again. Reconnect and refetch authoritative data when returning online or foreground.
 Offline data, if implemented, must be clearly marked stale and scoped to the account.
-Do not silently queue writes or retry POST automatically: there are no idempotency
-keys. After an uncertain create result, retrieve that ISBN to reconcile the outcome.
+Do not silently queue writes or retry POST automatically: book creation has no idempotency
+key. After an uncertain create result, search for that exact author/title pair to reconcile the outcome.
 
 ## 4. API contract
 
@@ -180,15 +184,15 @@ Development HTTP permissions must remain separate from production configuration.
 | GET | `/api/workspace` | Basic | 200 workspace JSON |
 | GET | `/api/books` | Basic | 200 array of books |
 | GET | `/api/books?author=...&title=...` | Basic | 200 filtered array |
-| GET | `/api/books/isbn/{isbn}` | Basic | 200 book JSON |
+| GET | `/api/books/{bookId}` | Basic | 200 book JSON |
 | POST | `/api/books` | Basic | 201 book JSON |
 | GET | `/api/books/events` | Basic | 200 SSE stream |
 | GET | `/actuator/health` | Public | Health status JSON |
 | GET | `/v3/api-docs` | Public | OpenAPI JSON |
 | GET | `/swagger-ui/index.html` | Public | Swagger UI |
 
-Unlisted endpoints are not part of the client contract. In particular, there is
-no `GET /api/books/{id}` route. Use ISBN for the detail URL.
+This table covers catalogue endpoints. See api.md for all authentication, PDF,
+reading progress and Google Drive endpoints. Use GET /api/books/{bookId} for details.
 
 ### Signup
 
@@ -243,7 +247,6 @@ Create request:
 
 ```json
 {
-  "isbn": "9780134685991",
   "title": "Effective Java",
   "author": "Joshua Bloch",
   "publishedDate": "2018",
@@ -254,7 +257,6 @@ Create request:
 
 | Field | Validation / meaning |
 | --- | --- |
-| `isbn` | Required string matching 10 or 13 digits; preserve leading zeroes |
 | `title` | Required, nonblank, maximum 255 characters |
 | `author` | Required, nonblank, maximum 255 characters |
 | `publishedDate` | Required string, maximum 20 characters; year or free-form date, not necessarily ISO |
@@ -266,7 +268,6 @@ The response has the same fields plus numeric `id`:
 ```json
 {
   "id": 51,
-  "isbn": "9780134685991",
   "title": "Effective Java",
   "author": "Joshua Bloch",
   "publishedDate": "2018",
@@ -275,9 +276,9 @@ The response has the same fields plus numeric `id`:
 }
 ```
 
-A successful create sets `Location` to the book's ISBN lookup URL. Cross-origin
+A successful create sets `Location` to the book's numeric book-ID lookup URL. Cross-origin
 browser code cannot currently read this header because CORS does not expose it;
-use the returned `isbn` to navigate. ISBN lookup of a missing or another workspace's
+use the returned `id` to navigate. Numeric book-ID lookup of a missing or another workspace's
 book returns 404.
 
 List and search return a bare array, not a page/envelope. Filters are exact matches;
@@ -308,7 +309,7 @@ Example created-book event:
 ```text
 id: 18
 event: book.created
-data: {"eventId":"18","type":"book.created","schemaVersion":1,"occurredAt":"2026-09-27T08:00:00.000Z","book":{"id":51,"isbn":"9780134685991","title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018","description":"Java best practices","completed":false}}
+data: {"eventId":"18","type":"book.created","schemaVersion":2,"occurredAt":"2026-09-27T08:00:00.000Z","book":{"id":51,"title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018","description":"Java best practices","completed":false}}
 
 ```
 
@@ -365,7 +366,7 @@ Example application error (timestamp is server-local and carries no timezone):
   "dateTime": "2026-09-27T14:00:00",
   "status": 409,
   "error": "Conflict",
-  "message": "Book already exists with isbn: 9780134685991",
+  "message": "A book with this author and title already exists in your workspace",
   "path": "/api/books"
 }
 ```
@@ -376,7 +377,7 @@ Example application error (timestamp is server-local and carries no timezone):
 | 401 | Invalid credentials or authentication required; stop automatic auth retries |
 | 403 | On create, show quota limit and refresh usage; elsewhere show access denied |
 | 404 | Show book not found in this workspace |
-| 409 | Show duplicate email/ISBN as appropriate; preserve form input |
+| 409 | Show duplicate email/author-title pair as appropriate; preserve form input |
 | 500 | Show a recoverable server error with retry where safe |
 | 503 | SSE capacity/stopping: reconnect with backoff; health may also report unavailable |
 | Network/timeout | Show offline/connection feedback; never assume a POST failed to commit |
@@ -411,18 +412,18 @@ curl -i --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/workspace"
 # 4. List your books (initially []).
 curl --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books"
 
-# 5. Create a book. Repeating the ISBN in this workspace returns 409.
+# 5. Create a book. Repeating the author/title pair in this workspace returns 409.
 curl -i --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books" \
   -H 'Content-Type: application/json' \
-  --data '{"isbn":"9780134685991","title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018","description":"Java best practices","completed":false}'
+  --data '{"title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018","description":"Java best practices","completed":false}'
 
 # 6. Search by exact author and title. Omit either to filter by only one.
 curl --user "$BOOKER_EMAIL" --get "$BOOKER_BASE_URL/api/books" \
   --data-urlencode 'author=Joshua Bloch' \
   --data-urlencode 'title=Effective Java'
 
-# 7. Open details using ISBN, not database ID.
-curl -i --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books/isbn/9780134685991"
+# 7. Open details using the numeric database ID returned at creation.
+curl -i --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books/1"
 
 # 8. Subscribe to future events. Keep this terminal open.
 curl -N --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books/events" \
@@ -441,9 +442,9 @@ curl -N --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books/events" \
 curl -N --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books/events" \
   -H 'Accept: text/event-stream' -H 'Last-Event-ID: 18'
 
-# Negative cases: protected request without auth, missing ISBN, invalid cursor.
+# Negative cases: protected request without auth, missing book ID, invalid cursor.
 curl -i "$BOOKER_BASE_URL/api/books"
-curl -i --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books/isbn/0000000000"
+curl -i --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books/9223372036854775807"
 curl -i --user "$BOOKER_EMAIL" "$BOOKER_BASE_URL/api/books/events" \
   -H 'Accept: text/event-stream' -H 'Last-Event-ID: invalid'
 
@@ -452,8 +453,8 @@ curl -fsS "$BOOKER_BASE_URL/v3/api-docs" -o booker-openapi.json
 ```
 
 For a tenant-isolation check, register a second email/workspace. Its list must be
-empty and its lookup must return 404 for the first workspace's ISBN until it
-creates its own copy. Its SSE stream must not reveal the first workspace's events.
+empty; numeric lookup of the first workspace's book must return 404, even if it
+creates its own book with the same author/title pair (which gets a distinct ID). Its SSE stream must not reveal the first workspace's events.
 
 ## 8. Local development, deployment and maintenance
 
@@ -539,10 +540,10 @@ Client acceptance criteria:
 
 - Signup, sign in, logout and reauthentication follow the Basic-auth contract.
 - No requests target invented auth, edit, delete, billing or paging endpoints.
-- Field validation matches the backend; ISBN and event cursor remain strings.
+- Field validation matches the backend; book IDs are numeric and event cursors remain strings.
 - Workspace usage maps snake_case response fields correctly.
 - List, detail and searches work for empty and populated workspaces.
-- Duplicate email/ISBN, missing books and quota exhaustion have clear feedback.
+- Duplicate email/author-title pair, missing books and quota exhaustion have clear feedback.
 - Two accounts cannot see each other's cached books, cursors or live events.
 - No credentials are logged, placed in URLs or persisted in plain browser storage.
 - SSE handles split frames, ready events, comments, reconnects and duplicate replay.
@@ -564,7 +565,7 @@ Preserve useful existing behavior and adapt to the installed stack. Implement th
 work, not just a proposal, and document any backend blockers separately.
 
 Implement signup, sign in, library list with exact author/title filters, create
-book, ISBN-based details, workspace usage and local logout. Use a cohesive,
+book, ID-based details, workspace usage and local logout. Use a cohesive,
 responsive, accessible interface with clear loading, empty, validation, error,
 offline and reconnecting states. Do not invent a brand's pricing or billing flow.
 
@@ -607,12 +608,12 @@ conventions; do not force a framework migration as part of the redesign.
 Implement the work and list backend blockers separately.
 
 Implement signup, sign in, a library with exact author/title filters, book
-creation, ISBN-based details, workspace usage and local logout. Provide a
+creation, ID-based details, workspace usage and local logout. Provide a
 cohesive accessible UI with loading, empty, field validation, duplicate/quota,
 offline and reconnecting states. Preserve navigation state appropriately.
 
 Use typed transport models, explicitly mapping book_limit and books_used. Treat
-ISBN, publication date and event cursor as strings; allow nullable description.
+publication date and event cursor as strings, and book ID as Long; allow nullable description.
 Configure the API base URL per build environment. Use a host address reachable
 from the chosen emulator/device. Any development HTTP exception must be limited
 to development builds; production uses HTTPS.
@@ -636,7 +637,7 @@ ordinary short HTTP request. Do not promise background OS push notifications.
 Logout/account changes must clear the old account's state, cancel streams and
 requests, and ignore stale completions. Any optional offline cache must be
 account-scoped and marked stale. Avoid automatic POST retries; reconcile uncertain
-creation results through ISBN lookup. Refresh workspace usage rather than
+creation results through numeric book-ID lookup. Refresh workspace usage rather than
 counting replayed events. Respect unsupported edit/delete/billing/team features.
 
 Add focused tests for transport mappings, authentication, validation, error states,

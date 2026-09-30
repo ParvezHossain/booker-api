@@ -1,5 +1,21 @@
 # PDF documents and personal reading progress
 
+## Current book identity update — 2026-09-30
+
+Book metadata now uses numeric id with title/author, publication date, description
+and manual completion. The exact, case-sensitive author/title pair is unique per
+workspace. Use GET /api/books/{bookId}; create Location uses that URL.
+Flyway V9 removes the retired identifier, preserves document/progress references,
+and upgrades new/retained book events to schemaVersion 2. Duplicate existing pairs
+block migration without deleting records; see README.md for the preflight query.
+Verification for this identity update: 74 backend tests passed with none skipped;
+13 Angular tests and its production build passed (existing CSS budget warning).
+The tests include numeric metadata lookup, author/title reuse and duplicate rejection,
+concurrent creates, OpenAPI fields/routes, reference preservation, event replay
+conversion and safe duplicate-pair migration failure.
+The historical phase notes below describe earlier verification checkpoints; api.md
+is the current API contract. PDF/Drive/progress URLs and semantics are unchanged.
+
 ## Recovery checkpoint — 2026-09-28
 
 Git HEAD `b4e7f8f` contains the workspace/authentication baseline. The recovered

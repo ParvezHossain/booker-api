@@ -8,9 +8,6 @@ public record BookResponse(
         @Schema(description = "Unique database identifier of the book", example = "1")
         Long id,
 
-        @Schema(description = "10 or 13-digit ISBN number", example = "9780134685991")
-        String isbn,
-
         @Schema(description = "Title of the book", example = "Effective Java")
         String title,
 

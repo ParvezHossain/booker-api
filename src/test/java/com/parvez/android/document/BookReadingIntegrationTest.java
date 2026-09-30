@@ -46,8 +46,8 @@ class BookReadingIntegrationTest {
         jdbc.update("INSERT INTO workspace_users (email, password_hash, workspace_id) VALUES (?, ?, ?)",
                 teammateEmail, owner.getPassword(), WorkspacePrincipal.currentWorkspace());
         teammate = (WorkspacePrincipal) accounts.loadUserByUsername(teammateEmail);
-        book = jdbc.queryForObject("INSERT INTO books (workspace_id, isbn, title, author, publication_date, completed) VALUES (?, ?, 'PDF', 'Author', '2026', false) RETURNING id",
-                Long.class, WorkspacePrincipal.currentWorkspace(), UUID.randomUUID().toString().substring(0, 13));
+        book = jdbc.queryForObject("INSERT INTO books (workspace_id, title, author, publication_date, completed) VALUES (?, 'PDF', 'Author', '2026', false) RETURNING id",
+                Long.class, WorkspacePrincipal.currentWorkspace());
         mvc = webAppContextSetup(context).apply(springSecurity()).build();
         pdf = pdf(144);
     }
@@ -279,7 +279,7 @@ class BookReadingIntegrationTest {
         assertFalse(jdbc.queryForObject("SELECT completed FROM books WHERE id = ?", Boolean.class, book));
     }
     @Test void manuallyCompletedBookRemainsCompletedWhilePersonalReadingChanges() throws Exception {
-        var created = books.createBook(new com.parvez.android.dto.BookRequest("1234567890123", "Already read",
+        var created = books.createBook(new com.parvez.android.dto.BookRequest("Already read",
                 "Author", "2026", "Manual completion", true));
         book = created.id();
         assertTrue(created.completed());
@@ -287,11 +287,11 @@ class BookReadingIntegrationTest {
         assertFalse(progress.get(book).completed());
         var started = progress.update(book, new ReadingProgressService.Update(doc.id(), 1, 0, UUID.randomUUID())).progress();
         assertFalse(started.completed());
-        assertTrue(books.getBookByISBN(created.isbn()).completed());
+        assertTrue(books.getBookById(created.id()).completed());
         assertTrue(progress.update(book, new ReadingProgressService.Update(doc.id(), 144, started.version(), UUID.randomUUID())).progress().completed());
         upload(UUID.randomUUID(), pdf(10));
         assertFalse(progress.get(book).completed());
-        mvc.perform(get("/api/books/isbn/{isbn}", created.isbn()).with(user(owner)))
+        mvc.perform(get("/api/books/{bookId}", created.id()).with(user(owner)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.completed").value(true));
     }
     @Test void staleFinalPageMergeCompletesWithoutMovingResumePosition() throws Exception {

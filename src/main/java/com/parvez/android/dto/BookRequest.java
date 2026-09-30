@@ -2,27 +2,13 @@ package com.parvez.android.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 @Schema(description = "Payload required to create a book in your workspace")
 public record BookRequest(
 
         @Schema(
-                description = "10 or 13-digit International Standard Book Number",
-                example = "9780134685991",
-                requiredMode = Schema.RequiredMode.REQUIRED
-        )
-        @NotBlank(message = "ISBN is required")
-        @Size(max = 20, message = "ISBN must not exceed 20 characters")
-        @Pattern(
-                regexp = "^(?:\\d{10}|\\d{13})$",
-                message = "ISBN must contain 10 or 13 digits"
-        )
-        String isbn,
-
-        @Schema(
-                description = "Title of the book",
+                description = "Title of the book; the exact author/title pair must be unique within your workspace",
                 example = "Effective Java",
                 requiredMode = Schema.RequiredMode.REQUIRED
         )

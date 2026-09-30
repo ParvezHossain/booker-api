@@ -40,8 +40,8 @@ class GoogleDriveIntegrationTest {
         String email = "drive-" + UUID.randomUUID() + "@example.com";
         accounts.register(new WorkspaceAccounts.Signup("Drive", email, "test-password-123"));
         user = (WorkspacePrincipal) accounts.loadUserByUsername(email); authenticate();
-        book = jdbc.queryForObject("INSERT INTO books (workspace_id, isbn, title, author, publication_date) VALUES (?, ?, 'Drive', 'Author', '2026') RETURNING id",
-                Long.class, WorkspacePrincipal.currentWorkspace(), UUID.randomUUID().toString().substring(0, 13));
+        book = jdbc.queryForObject("INSERT INTO books (workspace_id, title, author, publication_date) VALUES (?, 'Drive', 'Author', '2026') RETURNING id",
+                Long.class, WorkspacePrincipal.currentWorkspace());
         when(gateway.exchange(anyString(), anyString())).thenReturn(new GoogleDriveGateway.Tokens("access", "private-refresh", GoogleDriveGateway.SCOPE));
         when(gateway.refresh("private-refresh")).thenReturn(new GoogleDriveGateway.Tokens("access", null, GoogleDriveGateway.SCOPE));
     }

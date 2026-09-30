@@ -28,8 +28,9 @@ class BookReadingMigrationTest {
             var events = jdbc.queryForList("SELECT * FROM book_events ORDER BY id");
 
             migrate(schema.name(), null);
-            assertEquals(books, jdbc.queryForList("SELECT * FROM books ORDER BY id"));
-            assertEquals(events, jdbc.queryForList("SELECT * FROM book_events ORDER BY id"));
+            assertEquals(withoutLegacyIdentifier(books), jdbc.queryForList("SELECT * FROM books ORDER BY id"));
+            assertEquals(events.stream().map(row -> row.get("id")).toList(),
+                    jdbc.queryForList("SELECT id FROM book_events ORDER BY id", Long.class));
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM book_documents", Integer.class));
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM reading_progress", Integer.class));
 
@@ -50,7 +51,7 @@ class BookReadingMigrationTest {
             jdbc.update("DELETE FROM book_documents WHERE id = ?", document);
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM reading_progress", Integer.class));
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM reading_progress_operations", Integer.class));
-            assertEquals(books, jdbc.queryForList("SELECT * FROM books ORDER BY id"));
+            assertEquals(withoutLegacyIdentifier(books), jdbc.queryForList("SELECT * FROM books ORDER BY id"));
         });
     }
 
@@ -80,6 +81,53 @@ class BookReadingMigrationTest {
             migrate(schema.name(), null);
             assertReferenceIndexes(schema.jdbc(), schema.name());
             assertEquals(0, flyway(schema.name(), null).migrate().migrationsExecuted);
+        });
+    }
+
+    private java.util.List<java.util.Map<String, Object>> withoutLegacyIdentifier(java.util.List<java.util.Map<String, Object>> books) {
+        return books.stream().map(book -> {
+            var copy = new java.util.HashMap<>(book);
+            copy.remove("isbn");
+            return (java.util.Map<String, Object>) copy;
+        }).toList();
+    }
+
+    @Test void identityUpgradePreservesReferencesAndRemovesIdentifierFromEventReplay() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "8");
+            var jdbc = schema.jdbc();
+            long book = jdbc.queryForObject("SELECT min(id) FROM books", Long.class);
+            UUID document = seedProgress(jdbc, book);
+            jdbc.update("INSERT INTO books (workspace_id, isbn, author, title, publication_date) "
+                    + "SELECT workspace_id, '1111111111', 'Migration author', 'Migration title', '2026' FROM books WHERE id = ?", book);
+            var eventsBefore = jdbc.queryForList("SELECT id, workspace_id, (payload::jsonb #- '{book,isbn}') - 'schemaVersion' AS snapshot FROM book_events ORDER BY id");
+            var documentsBefore = jdbc.queryForList("SELECT * FROM book_documents");
+            var progressBefore = jdbc.queryForList("SELECT * FROM reading_progress");
+            migrate(schema.name(), null);
+            assertEquals(documentsBefore, jdbc.queryForList("SELECT * FROM book_documents"));
+            assertEquals(progressBefore, jdbc.queryForList("SELECT * FROM reading_progress"));
+            assertEquals(eventsBefore, jdbc.queryForList("SELECT id, workspace_id, payload::jsonb - 'schemaVersion' AS snapshot FROM book_events ORDER BY id"));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM information_schema.columns WHERE table_schema = ? AND table_name = 'books' AND column_name = 'isbn'", Integer.class, schema.name()));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM book_events WHERE payload::jsonb->'book' ? 'isbn' OR payload::jsonb->>'schemaVersion' <> '2'", Integer.class));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO books (workspace_id, author, title, publication_date) SELECT workspace_id, author, title, publication_date FROM books WHERE id = ?", book));
+            assertEquals(document, jdbc.queryForObject("SELECT document_id FROM reading_progress WHERE book_id = ?", UUID.class, book));
+        });
+    }
+
+    @Test void duplicatePairsBlockUpgradeWithoutDeletingBooksOrReferences() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "8");
+            var jdbc = schema.jdbc();
+            long book = jdbc.queryForObject("SELECT min(id) FROM books", Long.class);
+            seedProgress(jdbc, book);
+            jdbc.update("INSERT INTO books (workspace_id, isbn, author, title, publication_date) SELECT workspace_id, '1111111111', author, title, publication_date FROM books WHERE id = ?", book);
+            var booksBefore = jdbc.queryForList("SELECT * FROM books ORDER BY id");
+            var progressBefore = jdbc.queryForList("SELECT * FROM reading_progress");
+            assertThrows(org.flywaydb.core.api.FlywayException.class, () -> migrate(schema.name(), null));
+            assertEquals(booksBefore, jdbc.queryForList("SELECT * FROM books ORDER BY id"));
+            assertEquals(progressBefore, jdbc.queryForList("SELECT * FROM reading_progress"));
+            jdbc.update("UPDATE books SET title = title || ' (other edition)' WHERE isbn = '1111111111'");
+            migrate(schema.name(), null);
         });
     }
 

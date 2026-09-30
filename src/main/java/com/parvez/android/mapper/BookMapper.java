@@ -10,7 +10,6 @@ public class BookMapper {
     public BookResponse toBookResponse(Book book) {
         return new BookResponse(
                 book.getId(),
-                book.getIsbn(),
                 book.getTitle(),
                 book.getAuthor(),
                 book.getPublishedDate(),

@@ -50,8 +50,8 @@ public class GlobalExceptionHandler {
 
         String message = "The requested operation violates a database constraint";
 
-        if (isDuplicateIsbn(exception)) {
-            message = "A book with this ISBN already exists";
+        if (isDuplicateBook(exception)) {
+            message = "A book with this author and title already exists in your workspace";
         }
 
         return buildError(
@@ -160,7 +160,7 @@ public class GlobalExceptionHandler {
                 .body(error);
     }
 
-    private boolean isDuplicateIsbn(
+    private boolean isDuplicateBook(
             DataIntegrityViolationException exception
     ) {
 
@@ -172,7 +172,7 @@ public class GlobalExceptionHandler {
 
             if (message != null &&
                     message.toLowerCase()
-                            .contains("uk_books_isbn")) {
+                            .contains("uk_books_workspace_author_title")) {
                 return true;
             }
 

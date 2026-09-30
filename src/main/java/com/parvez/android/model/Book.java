@@ -7,8 +7,8 @@ import jakarta.persistence.*;
         name = "books",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uk_books_workspace_isbn",
-                        columnNames = {"workspace_id", "isbn"}
+                        name = "uk_books_workspace_author_title",
+                        columnNames = {"workspace_id", "author", "title"}
                 )
         }
 )
@@ -22,9 +22,6 @@ public class Book {
     public java.util.UUID getWorkspaceId() { return workspaceId; }
     public void setWorkspaceId(java.util.UUID workspaceId) { this.workspaceId = workspaceId; }
 
-
-    @Column(name = "isbn", nullable = false, length = 20)
-    private String isbn;
 
     @Column(nullable = false, length = 255)
     private String title;
@@ -44,8 +41,7 @@ public class Book {
     public Book() {
     }
 
-    public Book(String isbn, String title, String author, String publishedDate, String description) {
-        this.isbn = isbn;
+    public Book(String title, String author, String publishedDate, String description) {
         this.title = title;
         this.author = author;
         this.publishedDate = publishedDate;
@@ -54,14 +50,6 @@ public class Book {
 
     public Long getId() {
         return id;
-    }
-
-    public String getIsbn() {
-        return isbn;
-    }
-
-    public void setIsbn(String isbn) {
-        this.isbn = isbn;
     }
 
     public String getTitle() {

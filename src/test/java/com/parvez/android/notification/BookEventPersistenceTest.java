@@ -27,7 +27,7 @@ class BookEventPersistenceTest {
                 for (var connection : new Connection[]{admin, first, second}) {
                     connection.createStatement().execute("SET search_path TO " + schema);
                 }
-                for (String migration : new String[]{"V1__create_book_table.sql", "V3__book_created_events.sql"}) {
+                for (String migration : new String[]{"V1__create_book_table.sql", "V3__book_created_events.sql", "V4__saas_workspaces.sql", "V9__book_author_title_identity.sql"}) {
                     admin.createStatement().execute(Files.readString(Path.of("src/main/resources/db/migration", migration)));
                 }
                 first.setAutoCommit(false);
@@ -45,17 +45,17 @@ class BookEventPersistenceTest {
                 }
                 assertEquals(2, count(admin));
                 try (var rows = admin.createStatement().executeQuery(
-                        "SELECT id, payload::json->'book'->>'isbn' AS isbn FROM book_events ORDER BY id")) {
+                        "SELECT id, payload::json->'book'->>'title' AS title FROM book_events ORDER BY id")) {
                     assertTrue(rows.next());
                     assertEquals(1, rows.getLong("id"));
-                    assertEquals("2222222222", rows.getString("isbn"));
+                    assertEquals("2222222222", rows.getString("title"));
                     assertTrue(rows.next());
                     assertEquals(2, rows.getLong("id"));
-                    assertEquals("3333333333", rows.getString("isbn"));
+                    assertEquals("3333333333", rows.getString("title"));
                     assertFalse(rows.next());
                 }
                 assertThrows(java.sql.SQLException.class, () -> insert(second, "3333333333"));
-                admin.createStatement().executeUpdate("UPDATE books SET title = 'changed'");
+                admin.createStatement().executeUpdate("UPDATE books SET description = 'changed'");
                 assertEquals(2, count(admin));
             } finally {
                 first.rollback();
@@ -64,10 +64,10 @@ class BookEventPersistenceTest {
         }
     }
 
-    private static void insert(Connection connection, String isbn) throws Exception {
+    private static void insert(Connection connection, String title) throws Exception {
         try (var statement = connection.prepareStatement(
-                "INSERT INTO books (isbn, title, author, publication_date) VALUES (?, 'Title', 'Author', '2026')")) {
-            statement.setString(1, isbn);
+                "INSERT INTO books (workspace_id, title, author, publication_date) VALUES ('00000000-0000-0000-0000-000000000001', ?, 'Author', '2026')")) {
+            statement.setString(1, title);
             statement.executeUpdate();
         }
     }

@@ -1,5 +1,10 @@
 # Book notifications
 
+Book snapshots contain numeric id, title, author, publishedDate, description and
+completed. The author/title pair is unique per workspace. Flyway V9 upgrades
+new and retained snapshots to schemaVersion 2 without changing event IDs/cursors.
+Clients should accept that version and use GET /api/books/{bookId} for details.
+
 Connect to `GET /api/books/events` with the same bearer access-token Authorization header (or legacy HTTP Basic header)
 as the book API and `Accept: text/event-stream`. Use HTTPS in deployment.
 Each authenticated subscriber receives only books from their own workspace, including
@@ -8,7 +13,7 @@ replayed events. Register credentials using `/api/auth/signup`.
 ```text
 id: 17
 event: book.created
-data: {"eventId":"17","type":"book.created","schemaVersion":1,"occurredAt":"2026-09-26T12:00:00.000Z","book":{"id":123,"isbn":"9780134685991","title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018-01-11","description":null,"completed":false}}
+data: {"eventId":"17","type":"book.created","schemaVersion":2,"occurredAt":"2026-09-26T12:00:00.000Z","book":{"id":123,"title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018-01-11","description":null,"completed":false}}
 
 ```
 
@@ -30,7 +35,7 @@ Angular needs a fetch-based SSE client capable of setting Authorization and
 Last-Event-ID; native browser EventSource cannot set arbitrary headers.
 Kotlin can use an SSE-capable HTTP client with the same headers. Never put
 credentials in the URL. CORS currently allows `http://localhost:4200`; configure
-the deployed Angular origin using `CORS_ALLOWED_ORIGINS`. GET/POST and Last-Event-ID are allowed.
+the deployed Angular origin using `CORS_ALLOWED_ORIGINS`. GET/HEAD/POST/PUT/DELETE and Last-Event-ID are allowed.
 
 This is live application delivery. It does not wake a suspended/closed Android app
 or display operating-system notifications. Background push needs a separate
@@ -40,7 +45,7 @@ replays events missed while the app was offline.
 ## Persistence and operations
 
 Flyway V3 installs a PostgreSQL insert trigger that writes a snapshot event in the
-same transaction as the book. Rollbacks and duplicate ISBN failures create no
+same transaction as the book. Rollbacks and duplicate author/title pair failures create no
 event. Inserts from any backend instance or direct SQL are covered; book updates
 do not notify. Delivery never holds the book creation request open.
 
@@ -68,7 +73,7 @@ existing streams close on database failure and recover through client replay.
 Manual smoke test (credentials prompted by curl):
 
 ```sh
-curl -N --user admin -H 'Accept: text/event-stream' http://localhost:8080/api/books/events
+curl -N --user owner@example.com -H 'Accept: text/event-stream' http://localhost:8080/api/books/events
 ```
 
 Create a book through the existing POST endpoint in another terminal. Expect one

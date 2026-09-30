@@ -73,8 +73,8 @@ public class BookController {
     }
 
     @Operation(
-            summary = "Get book by ISBN",
-            description = "Retrieves a book by ISBN within your workspace. An ISBN belonging only to another workspace returns 404."
+            summary = "Get book by ID",
+            description = "Retrieves a book by numeric ID within your workspace. A book belonging to another workspace returns 404."
     )
     @ApiResponses(value = {
             @ApiResponse(
@@ -83,22 +83,23 @@ public class BookController {
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = BookResponse.class))
             ),
             @ApiResponse(responseCode = "401", description = "Unauthorized - bearer token or Basic authentication required", content = @Content),
-            @ApiResponse(responseCode = "404", description = "No book found matching the given ISBN", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+            @ApiResponse(responseCode = "400", description = "Book ID must be numeric", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class))),
+            @ApiResponse(responseCode = "404", description = "No book found matching the given ID", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     })
-    @GetMapping("/isbn/{isbn}")
-    public ResponseEntity<BookResponse> getBookByIsbn(
+    @GetMapping("/{bookId}")
+    public ResponseEntity<BookResponse> getBookById(
             @Parameter(
-                    description = "10 or 13-digit ISBN number",
-                    example = "9780134685991",
+                    description = "Numeric book identifier",
+                    example = "1",
                     required = true
             )
-            @PathVariable String isbn) {
-        return ResponseEntity.ok(bookService.getBookByISBN(isbn));
+            @PathVariable long bookId) {
+        return ResponseEntity.ok(bookService.getBookById(bookId));
     }
 
     @Operation(
             summary = "Create a new book record",
-            description = "Creates a book in your workspace and records a book.created notification in the same transaction. ISBN must be unique within your workspace; other workspaces may use the same ISBN. FREE workspaces allow 100 books. Returns the created book and its ISBN lookup URL in Location."
+            description = "Creates a book in your workspace and records a book.created notification in the same transaction. The author and title pair must be unique within your workspace; other workspaces may use the same pair. Comparisons use exact, case-sensitive values. FREE workspaces allow 100 books. Returns the created book and its numeric ID lookup URL in Location."
     )
     @ApiResponses(value = {
             @ApiResponse(
@@ -107,14 +108,14 @@ public class BookController {
                     headers = @Header(
                             name = "Location",
                             description = "URI of the newly created book resource",
-                            schema = @Schema(type = "string", example = "/api/books/isbn/9780134685991")
+                            schema = @Schema(type = "string", example = "/api/books/1")
                     ),
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = BookResponse.class))
             ),
             @ApiResponse(responseCode = "400", description = "Bad Request - Request body failed validation constraints", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class))),
             @ApiResponse(responseCode = "401", description = "Unauthorized - bearer token or Basic authentication required", content = @Content),
             @ApiResponse(responseCode = "403", description = "Workspace book limit reached", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class))),
-            @ApiResponse(responseCode = "409", description = "Conflict - ISBN already exists in your workspace", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+            @ApiResponse(responseCode = "409", description = "Conflict - Author and title pair already exists in your workspace", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     })
     @PostMapping
     public ResponseEntity<BookResponse> createBook(
@@ -125,8 +126,8 @@ public class BookController {
 
         URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
-                .path("/isbn/{isbn}")
-                .buildAndExpand(response.isbn())
+                .path("/{bookId}")
+                .buildAndExpand(response.id())
                 .toUri();
 
         return ResponseEntity
