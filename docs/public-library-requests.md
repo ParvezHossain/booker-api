@@ -34,13 +34,19 @@ curl -X POST 'http://localhost:8080/api/admin/public-book-requests/REQUEST_ID/ac
 
 Malformed JSON, JSON null, missing publication date and oversized metadata fields return 400 before book creation or PDF storage.
 
-Title and author are taken from the original request; administrators provide the existing model's remaining metadata. No category/ISBN/language fields were invented. Publication date is required, at most 20 characters. Description is at most 5000 characters. Request title/author are required, at most 255 characters, and stripped of surrounding whitespace.
+Title and author are taken from the original request; administrators provide the existing model's remaining metadata. Publication date is required, at most 20 characters. Description is at most 5000 characters. Request title/author are required, at most 255 characters, and stripped of surrounding whitespace.
 
 Errors: 400 invalid UUID, fields or multipart; 401 missing/invalid authentication; 403 missing workspace or Super Admin privilege; 404 missing request; 409 duplicate pending request, existing public book or already reviewed request; 413 configured multipart limit; 415 invalid PDF/type/extension; 503 storage unavailable. Rejection of a missing request returns 404. Invalid admin status filters return 400.
 
 ## Persistence and transactions
 
 Flyway V12 adds public_library_book_requests, workspace/status indexes, a unique pending title/author pair per workspace, and public_request_emails. Existing public catalogue uniqueness remains authoritative at acceptance. Different workspaces can request the same title; once one is accepted, another acceptance encounters existing public-book duplicate rules. That request remains pending and can be rejected.
+
+Flyway V13 extends the existing outbox with `email_type` (`SUBMISSION` or
+`DECISION`), a subject and optional HTML body. Its primary key is now
+`(request_id, email_type, recipient)`, so pending administrator notifications and
+requester decisions coexist. Existing queued V12 decisions retain their recipient,
+message and timestamp, receive the original subject, and remain plain-text emails.
 
 Requests begin PENDING. Review locks the request row, creates the public book through PublicBookService and validates/stores its PDF through BookDocumentService before marking ACCEPTED. Any failure rolls back database changes. Rollback synchronization removes an uploaded file if a later outer transaction fails; existing failed-upload cleanup handles parser/storage failures. Process crashes or cleanup failures still need the existing storage orphan reconciliation procedure. Reviewed requests cannot be reopened. Duplicate review calls return 409 rather than creating another book. Public book deletion preserves the request audit with a null bookId.
 
@@ -50,10 +56,45 @@ Multipart acceptance obeys spring.servlet.multipart.max-file-size/max-request-si
 
 Review inserts a durable workspace-scoped event in the existing book_events store. GET /api/books/events emits public-book-request.reviewed with eventId, type, schemaVersion=1, requestId, status, bookId, message and occurredAt. Existing book.created events keep their existing names and payloads. Clients should ignore unknown event types and persist SSE cursors; workspace request history remains available after disconnection.
 
-The decision transaction also inserts an email receipt addressed to the authenticated submitter's registered email. The scheduled worker only sees committed receipts, uses the existing JavaMailSender and app.password-reset.from sender configuration, and deletes receipts after successful SMTP delivery. SMTP failure retains the receipt for retry and never rolls back the review. Missing SMTP/from configuration leaves receipts pending. Delivery is at least once: a crash after SMTP acceptance but before database commit can cause duplicate email. Multiple workers use FOR UPDATE SKIP LOCKED to avoid simultaneous receipt processing.
+Successful submission inserts one `SUBMISSION` receipt for every persisted
+`workspace_users` account with role `SUPER_ADMIN`, in the same transaction as the
+request. Recipients are snapshotted at submission; bootstrap environment values
+are not used for routing and may remain unset after provisioning. The notification
+uses a professional HTML template with inline styles and a UTF-8 plain-text
+alternative. It includes title, author, workspace name/ID, requester email,
+request ID and submission time in UTC, followed by review instructions. All
+submitted values are HTML-escaped; the fixed subject cannot contain user-supplied
+header content. No frontend review URL is assumed.
 
-Required configuration: existing spring.mail.* and app.password-reset.from. Optional books.requests.email-poll-millis (default 30000). Existing SMTP timeout settings bound network waits. Monitor pending email receipts. No new libraries or frontend secrets are required.
+Duplicate/invalid submissions do not enqueue another notification. Transaction
+rollback removes both request and receipts. If no Super Admin account exists,
+submission still succeeds, a warning is logged, and no administrator receipt is
+created; provisioning an admin later does not backfill old requests. Provision
+at least one Super Admin before accepting workspace requests.
+
+The decision transaction also inserts a separate `DECISION` receipt addressed to
+the authenticated submitter's registered email. Decision subjects/plain-text content
+and submission HTML/plain-text templates remain unchanged.
+
+V14 adds a stable receipt UUID and publication/retry timestamps. A bounded publisher
+sends only due receipt IDs to RabbitMQ after commit and waits for confirmation;
+recipient/content data remain in PostgreSQL. A durable quorum queue, single active
+consumer and prefetch 1 serialize SMTP delivery across backend replicas. Only the
+specific successful receipt is deleted, after SMTP acceptance; broker acknowledgement
+follows database commit. Duplicate completed tokens are harmless, but a crash after
+SMTP acceptance before commit can still duplicate email: delivery is at least once.
+
+Failed sends use delayed exponential retries and are parked in PostgreSQL after the
+configured maximum. They do not block healthy later mail. Unavailable/full RabbitMQ
+retains unpublished receipts; confirmed but unfinished receipts become eligible for
+recovery redispatch. Malformed/infrastructure-failed tokens are quarantined without
+an immediate requeue loop. Missing sender settings leave mail pending.
+
+Required configuration: existing `spring.mail.*` / `app.password-reset.from`, broker
+credentials, and provisioned SUPER_ADMIN accounts for submission alerts. See the
+[request email queue guide](request-email-queue.md) for queue limits, retry settings,
+feature pause, deployment and operator recovery. Password-reset mail remains separate.
 
 ## Verification
 
-PublicLibraryRequestIntegrationTest covers authenticated submission, validation, identity derivation, workspace history isolation, admin authorization, rejection, acceptance, PDF rollback (including outer transaction file cleanup), concurrent reviews, duplicate submissions and invalid review transitions. PublicRequestEmailDeliveryTest covers SMTP triggering and retention on failure. OpenApiCoverageTest inventory increases from 38 to 43 operations. Existing public library tests continue to verify upload, reading, authorization and deletion.
+PublicLibraryRequestIntegrationTest covers authenticated submission, validation, identity derivation, workspace history isolation, admin authorization, rejection, acceptance, PDF rollback (including outer transaction file cleanup), concurrent reviews, duplicate submissions, transactional administrator notifications, submission rollback and invalid review transitions. PublicRequestEmailDeliveryTest covers decision and administrator SMTP delivery, UTF-8 HTML/plain-text alternatives, precise receipt deletion, missing configuration and retention on failure. PublicRequestEmailTemplateTest verifies escaping and request details; BookReadingMigrationTest verifies preservation of queued emails during V13/V14 upgrades. RequestEmailPublisherTest verifies bounded batches and broker failures; RequestEmailRabbitIntegrationTest exercises real RabbitMQ backpressure, sequential delivery across two consumers, delayed retries, parked failures, duplicate tokens and quarantine. OpenApiCoverageTest verifies all 43 business operations and the Markdown route inventory. Existing public library tests continue to verify upload, reading, authorization and deletion.

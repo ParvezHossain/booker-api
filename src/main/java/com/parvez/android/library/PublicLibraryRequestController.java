@@ -39,7 +39,7 @@ public class PublicLibraryRequestController {
         this.service = service; this.objectMapper = objectMapper; this.validator = validator;
     }
 
-    @Operation(summary = "Request a public library book", description = "Workspace identity and requester email come from authentication. Only title and authorName are needed. Duplicate pending workspace requests or existing public books return 409.")
+    @Operation(summary = "Request a public library book", description = "Workspace identity and requester email come from authentication. Only title and authorName are needed. Duplicate pending workspace requests or existing public books return 409. Submission transactionally queues an HTML/plain-text email to each persisted Super Admin account. The response confirms persistence, not SMTP delivery; without a provisioned Super Admin, no administrator email is queued.")
     @ApiResponse(responseCode = "201", description = "Pending book request created", content = @Content(mediaType = "application/json", schema = @Schema(implementation = PublicLibraryBookRequest.class)))
     @PostMapping("/api/public-book-requests")
     public ResponseEntity<PublicLibraryBookRequest> submit(@Valid @RequestBody PublicLibraryRequestService.Submit input) {

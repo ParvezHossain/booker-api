@@ -20,13 +20,16 @@ import java.util.UUID;
 @Service
 @Transactional(readOnly = true)
 public class PublicLibraryRequestService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PublicLibraryRequestService.class);
     public record Submit(@NotBlank @Size(max=255) String title, @NotBlank @Size(max=255) String authorName) {}
     public record Metadata(@NotBlank @Size(max=20) String publishedDate, @Size(max=5000) String description, Boolean completed) {}
     private final JdbcTemplate jdbc;
     private final PublicBookService books;
     private final BookDocumentService documents;
-    public PublicLibraryRequestService(JdbcTemplate jdbc, PublicBookService books, BookDocumentService documents) {
-        this.jdbc = jdbc; this.books = books; this.documents = documents;
+    private final PublicRequestEmailTemplate emails;
+    public PublicLibraryRequestService(JdbcTemplate jdbc, PublicBookService books, BookDocumentService documents,
+                                       PublicRequestEmailTemplate emails) {
+        this.jdbc = jdbc; this.books = books; this.documents = documents; this.emails = emails;
     }
     @Transactional
     public PublicLibraryBookRequest submit(Submit input) {
@@ -38,7 +41,15 @@ public class PublicLibraryRequestService {
         int inserted = jdbc.update("INSERT INTO public_library_book_requests(id,title,author_name,workspace_id,requester_email) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING",
                 id, title, author, workspace, WorkspacePrincipal.currentEmail());
         if (inserted == 0) throw new ResponseStatusException(HttpStatus.CONFLICT, "Your workspace already has a pending request for this book");
-        return find(id, false);
+        var request = find(id, false);
+        String workspaceName = jdbc.queryForObject("SELECT name FROM workspaces WHERE id=?", String.class, workspace);
+        var email = emails.submission(request, workspaceName);
+        int recipients = jdbc.update("""
+                INSERT INTO public_request_emails(request_id, email_type, recipient, subject, message, html_message)
+                SELECT ?, 'SUBMISSION', email, ?, ?, ? FROM workspace_users WHERE role='SUPER_ADMIN'
+                """, id, email.subject(), email.text(), email.html());
+        if (recipients == 0) log.warn("Public book request submitted without a provisioned Super Admin email recipient");
+        return request;
     }
     public List<PublicLibraryBookRequest> own() {
         return jdbc.query("SELECT * FROM public_library_book_requests WHERE workspace_id=? ORDER BY created_at DESC", this::map, WorkspacePrincipal.currentWorkspace());

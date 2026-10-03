@@ -1,6 +1,6 @@
 # API Documentation
 
-Source-reviewed reference for **Booker SaaS API**. Contract metadata version: **2.1.0** (`OpenApiConfig`); routes use `/api` without a version segment. Reviewed against the repository working tree on 2026-10-01.
+Source-reviewed reference for **Booker SaaS API**. Contract metadata version: **2.1.0** (`OpenApiConfig`); routes use `/api` without a version segment. The inventory is checked against registered controller mappings by automated tests.
 
 ## Contents
 
@@ -20,7 +20,7 @@ Source-reviewed reference for **Booker SaaS API**. Contract metadata version: **
 - [14. Public library book requests](#14-public-library-book-requests)
 - [15. Operations and legacy mapping](#15-operations-and-legacy-mapping)
 - [16. Client workflows and synchronization](#16-client-workflows-and-synchronization)
-- [17. Configuration, discrepancies and maintenance](#17-configuration-discrepancies-and-maintenance)
+- [17. Configuration and maintenance](#17-configuration-and-maintenance)
 
 ## 1. Overview and base URL
 
@@ -79,7 +79,7 @@ Signup creates an OWNER in a FREE workspace. SUPER_ADMIN provisioning uses backe
 | Last-Event-ID | SSE | Optional replay cursor; see endpoint. |
 | Cookie | Google callback | Browser binding cookie issued by connect. Not general API authentication. |
 
-Responses are direct objects/arrays without a common success envelope. IDs are numeric int64 for books and UUID strings for workspace/document/request/import/operation identifiers. JSON uses the declared DTO field names; workspace usage keys are `book_limit` and `books_used`. JSON examples use UTF-8. PDF Content-Disposition filenames explicitly use UTF-8; callback HTML declares UTF-8. No additional application-wide character encoding setting or request/correlation ID API contract is declared.
+Responses are direct objects/arrays without a common success envelope. IDs are numeric int64 for books and UUID strings for workspace/document/request/import/operation identifiers. JSON uses the declared DTO field names; workspace usage keys are `book_limit` and `books_used`. JSON examples use UTF-8. PDF Content-Disposition filenames explicitly use UTF-8; callback HTML declares UTF-8. No request/correlation ID API contract is declared.
 
 `Instant` fields serialize as ISO-8601 timestamps with an offset/UTC `Z`; fractional seconds may be present. `ApiError.dateTime` is LocalDateTime **without an offset**. `publishedDate` is an arbitrary nonblank string up to 20 characters, not a parsed ISO date. Clients must tolerate nullable fields and use server progress calculations.
 
@@ -100,6 +100,8 @@ Browser CORS defaults to `http://localhost:4200`, configurable with comma-separa
 | 401 | Missing/invalid authentication, invalid login/refresh/logout token. |
 | 403 | Role/workspace restriction, book/storage quota or Google denial. |
 | 404 | Missing/inaccessible book/PDF/import/request, wrong library. |
+| 405 | Unsupported method on an accessible route; Allow identifies supported methods. |
+| 406 | Accept requests an unsupported representation. |
 | 409 | Duplicate/constraint, already-reviewed request, version/operation conflict, Drive connection required. |
 | 413 | Private file limit or servlet multipart limit. |
 | 415 | Unsupported request media type or unsupported/unsafe PDF. |
@@ -129,7 +131,7 @@ Browser CORS defaults to `http://localhost:4200`, configurable with comma-separa
 | message | String | Safe explanation; validation field messages joined with comma and space. |
 | path | String | Request URI, without query string. |
 
-Malformed JSON returns `Invalid request body`; missing/type-invalid parameters/headers/parts return `Missing or invalid request parameter`; multipart oversize returns `PDF exceeds the upload limit`; unsupported request media type returns `Unsupported content type`; unhandled exceptions return `An unexpected error occurred`. Database constraint violations return 409, with specific duplicate-book messages where recognized. There is no separate field-error object.
+Malformed JSON returns `Invalid request body`; missing/type-invalid parameters/headers/parts return `Missing or invalid request parameter`; multipart oversize returns `PDF exceeds the upload limit`; unsupported request media type returns `Unsupported content type`; unsupported methods return 405 with `Allow`; unacceptable response media types return 406; unhandled exceptions return `An unexpected error occurred`. Database constraint violations return 409, with specific duplicate-book messages where recognized. There is no separate field-error object.
 
 **Do not assume every error is ApiError.** Spring Security failures happen before controller advice and no custom JSON entry point/access-denied handler is configured. Their body is not fixed here; authentication challenge headers may be present. Range failures use framework behavior. HEAD responses have no body. Progress revision conflicts return a ReadingProgress object with HTTP 409; replaced-document/reused-operation conflicts return ApiError. Health errors return health objects. See each endpoint's errors plus these common rules. JSON-consuming endpoints may return 400/415 as described above; all controller operations may encounter the generic 500 handler.
 
@@ -329,8 +331,6 @@ Endpoint examples and field tables below reference these reusable schemas. Array
 
 ### 6.1 Create workspace and owner
 
-**Description:** Create workspace and owner. Controller: `WorkspaceController`.
-
 **HTTP request**
 
 ```http
@@ -338,14 +338,6 @@ POST /api/auth/signup
 ```
 
 **Authentication / authorization:** No. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -402,15 +394,11 @@ Content-Type: application/json
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
 | 409 | Email already registered / database constraint; transaction rolls back. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Creates an empty FREE workspace with a 100-book limit. Does not return tokens; log in separately. Roles cannot be selected by signup.
 
 ### 6.2 Log in
-
-**Description:** Log in. Controller: `AuthController`.
 
 **HTTP request**
 
@@ -419,14 +407,6 @@ POST /api/auth/login
 ```
 
 **Authentication / authorization:** No. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -482,15 +462,11 @@ Content-Type: application/json
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
 | 401 | Unknown email or incorrect password: Invalid credentials or refresh token. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 OWNER and SUPER_ADMIN use the same login. Each login creates an independent refresh session. Cache-Control: no-store; Pragma: no-cache.
 
 ### 6.3 Rotate refresh token
-
-**Description:** Rotate refresh token. Controller: `AuthController`.
 
 **HTTP request**
 
@@ -499,14 +475,6 @@ POST /api/auth/refresh
 ```
 
 **Authentication / authorization:** No. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -560,15 +528,11 @@ Content-Type: application/json
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
 | 401 | Expired, invalid, consumed or credential-version-invalid refresh token. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Consumes refresh token atomically once. Serialize refresh requests and replace both stored tokens together. Retrying a consumed refresh token fails. Cache-Control: no-store; Pragma: no-cache.
 
 ### 6.4 Log out
-
-**Description:** Log out. Controller: `AuthController`.
 
 **HTTP request**
 
@@ -577,14 +541,6 @@ POST /api/auth/logout
 ```
 
 **Authentication / authorization:** No. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -629,15 +585,11 @@ Response Fields: None.
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
 | 401 | Malformed, expired or wrong token type. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Deletes only the supplied refresh session. A valid signed refresh token already removed returns 204. Existing access tokens remain valid until expiry unless credentials change. Clear client session/cache. Cache-Control: no-store.
 
 ### 6.5 Change password
-
-**Description:** Change password. Controller: `PasswordController`.
 
 **HTTP request**
 
@@ -646,14 +598,6 @@ POST /api/auth/change-password
 ```
 
 **Authentication / authorization:** Authenticated. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -702,15 +646,11 @@ Response Fields: None.
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). Current password is incorrect or fields fail validation. |
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Revokes all account access/refresh/reset tokens by credential-version increment and record deletion. Log in again. Works for workspace owners and Super Admin. Cache-Control: no-store.
 
 ### 6.6 Request password reset
-
-**Description:** Request password reset. Controller: `PasswordController`.
 
 **HTTP request**
 
@@ -719,14 +659,6 @@ POST /api/auth/forgot-password
 ```
 
 **Authentication / authorization:** No. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -776,15 +708,11 @@ Content-Type: application/json
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
 | 503 | Password reset email is not configured. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Same 202 body for unknown/known emails and delivery failure. At most one issuance per account per minute; default expiry 30 minutes. Token is emailed, never returned. Cache-Control: no-store.
 
 ### 6.7 Reset password
-
-**Description:** Reset password. Controller: `PasswordController`.
 
 **HTTP request**
 
@@ -793,14 +721,6 @@ POST /api/auth/reset-password
 ```
 
 **Authentication / authorization:** No. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -846,8 +766,6 @@ Response Fields: None.
 | --- | --- |
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). Invalid, expired or already-used reset token; invalid fields. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Example token illustrates syntax only: use the actual emailed token. Single-use reset revokes all account sessions and reset tokens. Log in again. Cache-Control: no-store.
@@ -856,8 +774,6 @@ Example token illustrates syntax only: use the actual emailed token. Single-use 
 
 ### 7.1 Get current workspace
 
-**Description:** Get current workspace. Controller: `WorkspaceController`.
-
 **HTTP request**
 
 ```http
@@ -865,14 +781,6 @@ GET /api/workspace
 ```
 
 **Authentication / authorization:** Workspace. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -919,8 +827,6 @@ Content-Type: application/json
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 | 403 | Workspace account required. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Workspace is derived from authenticated account. Super Admin has no workspace. PRO entitlements/limits are operator-managed; no payments or upgrade endpoint.
@@ -929,8 +835,6 @@ Workspace is derived from authenticated account. Super Admin has no workspace. P
 
 ### 8.1 List or search private books
 
-**Description:** List or search private books. Controller: `BookController`.
-
 **HTTP request**
 
 ```http
@@ -938,10 +842,6 @@ GET /api/books
 ```
 
 **Authentication / authorization:** Workspace. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
 
 **Query parameters**
 
@@ -999,15 +899,11 @@ Content-Type: application/json
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 | 403 | Workspace account required. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Unpaginated array; empty result is []. No supported page, size or sort parameters. Result order is not explicitly specified. Filters are exact and case-sensitive, not substring search.
 
 ### 8.2 Get private book
-
-**Description:** Get private book. Controller: `BookController`.
 
 **HTTP request**
 
@@ -1022,10 +918,6 @@ GET /api/books/{bookId}
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -1075,15 +967,11 @@ Content-Type: application/json
 | 403 | Workspace account required. |
 | 404 | Book not found in current workspace. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Identity and authorization are derived from the authenticated account; no client workspace selector is used.
 
 ### 8.3 Create private book
-
-**Description:** Create private book. Controller: `BookController`.
 
 **HTTP request**
 
@@ -1092,14 +980,6 @@ POST /api/books
 ```
 
 **Authentication / authorization:** Workspace. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -1166,8 +1046,6 @@ Content-Type: application/json
 | 403 | Workspace account required. Workspace book limit reached. |
 | 409 | Exact author/title pair already exists in workspace. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Location identifies /api/books/{id}. Quota check serialized by workspace row lock. Book and book.created event commit together. No private metadata update/delete route is exposed.
@@ -1175,8 +1053,6 @@ Location identifies /api/books/{id}. Quota check serialized by workspace row loc
 ## 9. Private PDF documents
 
 ### 9.1 Upload or replace private PDF
-
-**Description:** Upload or replace private PDF. Controller: `BookDocumentController`.
 
 **HTTP request**
 
@@ -1191,10 +1067,6 @@ POST /api/books/{bookId}/document
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -1257,15 +1129,11 @@ Content-Type: application/json
 | 415 | Invalid extension/MIME or unsafe, encrypted or invalid PDF. |
 | 503 | Storage unavailable or validator busy. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Creates an immutable version and switches active PDF only after successful validation. Old versions remain and count toward storage quota. Retry lookup uses book + account + UUID and returns original metadata without comparing the new bytes. Reuse only for the same intended upload; replayed version may now be inactive. Refetch metadata. Location points to document metadata; Cache-Control: no-store.
 
 ### 9.2 Get private PDF metadata
-
-**Description:** Get private PDF metadata. Controller: `BookDocumentController`.
 
 **HTTP request**
 
@@ -1280,10 +1148,6 @@ GET /api/books/{bookId}/document
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -1337,15 +1201,11 @@ Content-Type: application/json
 | 403 | Workspace account required. |
 | 404 | Book or active PDF not found in accessible library. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Only active version exposed. No storage path/provider/key in response. Cache-Control: no-store.
 
 ### 9.3 Read private PDF
-
-**Description:** Read private PDF. Controller: `BookDocumentController`.
 
 **HTTP request**
 
@@ -1412,15 +1272,11 @@ Response Fields: None (binary representation).
 | 416 | Invalid/unsatisfiable byte range; framework response, not guaranteed ApiError. |
 | 503 | Document storage/content unavailable. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 200 full PDF or 206 byte range with Content-Range. Streams Resource through Spring MVC. Headers: Content-Type application/pdf, Accept-Ranges bytes, ETag quoted document UUID, Content-Disposition inline/attachment with UTF-8 filename, Cache-Control no-store, X-Content-Type-Options nosniff. Every range request requires authentication. No signed URL returned. No application-specific If-Range processing is implemented; do not rely on it instead of documentId pinning.
 
 ### 9.4 Inspect private PDF headers
-
-**Description:** Inspect private PDF headers. Controller: `BookDocumentController`.
 
 **HTTP request**
 
@@ -1484,8 +1340,6 @@ Response Fields: None.
 | 409 | Pinned document was replaced. |
 | 503 | Document storage/content unavailable. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Same authorization and version checks as GET. Returns complete 64-bit Content-Length and PDF headers without opening a byte stream. Ignores Range. Response Body: None, including HEAD errors.
@@ -1493,8 +1347,6 @@ Same authorization and version checks as GET. Returns complete 64-bit Content-Le
 ## 10. Private reading progress
 
 ### 10.1 Get account-private reading progress
-
-**Description:** Get account-private reading progress. Controller: `ReadingProgressController`.
 
 **HTTP request**
 
@@ -1509,10 +1361,6 @@ GET /api/books/{bookId}/reading-progress
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -1566,15 +1414,11 @@ Content-Type: application/json
 | 403 | Workspace account required. |
 | 404 | Book or active PDF not found. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 First open returns currentPage=0, pagesRead=0, progressPercentage=0.00, resumePage=1, version=0, lastReadAt=null, completed=false; no record is created by GET. totalPages is derived from active PDF. Cache-Control: no-store.
 
 ### 10.2 Save account-private reading progress
-
-**Description:** Save account-private reading progress. Controller: `ReadingProgressController`.
 
 **HTTP request**
 
@@ -1589,10 +1433,6 @@ PUT /api/books/{bookId}/reading-progress
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -1662,15 +1502,11 @@ Content-Type: application/json
 | 404 | Book or active PDF not found. |
 | 409 | Revision conflict returns ReadingProgress; replaced PDF/reused operation returns ApiError. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 See reading synchronization rules below. Exact accepted-operation retry returns latest progress with 200, not necessarily the original snapshot, without new timestamp/revision. Completion never writes Book.completed. Cache-Control: no-store.
 
 ### 10.3 Batch account-private reading summaries
-
-**Description:** Batch account-private reading summaries. Controller: `ReadingProgressController`.
 
 **HTTP request**
 
@@ -1679,10 +1515,6 @@ GET /api/books/reading-summaries
 ```
 
 **Authentication / authorization:** Workspace. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
 
 **Query parameters**
 
@@ -1764,8 +1596,6 @@ Content-Type: application/json
 | 403 | Workspace account required. |
 | 404 | Any requested ID is missing or outside accessible library/workspace. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Results ordered by bookId ascending. Entire request fails if any unique ID is inaccessible. No PDF => document=null and progress=null. PDF without saved progress => first-open progress. Cache-Control: no-store. This is batching, not pagination.
@@ -1774,8 +1604,6 @@ Results ordered by bookId ascending. Entire request fails if any unique ID is in
 
 ### 11.1 Start Google Drive connection
 
-**Description:** Start Google Drive connection. Controller: `GoogleDriveController`.
-
 **HTTP request**
 
 ```http
@@ -1783,14 +1611,6 @@ POST /api/integrations/google-drive/connect
 ```
 
 **Authentication / authorization:** Authenticated. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -1834,15 +1654,11 @@ Content-Type: application/json
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 | 503 | Drive integration disabled/not configured. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Requests https://www.googleapis.com/auth/drive.file with OAuth PKCE S256, offline access and consent. Sets booker_drive_binding cookie: HttpOnly, SameSite=Lax, callback path, ten-minute lifetime; Secure when request.isSecure(). State expires after ten minutes and is single use. Open authorizationUrl in same browser with cookie. Cache-Control: no-store.
 
 ### 11.2 Complete Google OAuth callback
-
-**Description:** Complete Google OAuth callback. Controller: `GoogleDriveController`.
 
 **HTTP request**
 
@@ -1851,10 +1667,6 @@ GET /api/integrations/google-drive/callback
 ```
 
 **Authentication / authorization:** No. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
 
 **Query parameters**
 
@@ -1903,15 +1715,11 @@ Response Fields: None (HTML representation).
 | 403 | Google credential exchange denied. |
 | 503 | Drive unavailable/not configured. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Controller query parameters are optional at binding time, but service requires state, code and cookie. Validates state/cookie instead of API authentication. Google error query is not handled separately; a denial without code yields 400. Returns HTML, clears binding cookie, no redirect or Google tokens in response. Cache-Control: no-store.
 
 ### 11.3 Check Google Drive connection
-
-**Description:** Check Google Drive connection. Controller: `GoogleDriveController`.
 
 **HTTP request**
 
@@ -1920,14 +1728,6 @@ GET /api/integrations/google-drive/connection
 ```
 
 **Authentication / authorization:** Authenticated. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -1969,15 +1769,11 @@ Content-Type: application/json
 | --- | --- |
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 connected=false when disabled or no local connection exists. Does not refresh/check live Google credentials. Cache-Control: no-store.
 
 ### 11.4 Disconnect Google Drive
-
-**Description:** Disconnect Google Drive. Controller: `GoogleDriveController`.
 
 **HTTP request**
 
@@ -1986,14 +1782,6 @@ DELETE /api/integrations/google-drive/connection
 ```
 
 **Authentication / authorization:** Authenticated. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -2030,15 +1818,11 @@ Response Fields: None.
 | --- | --- |
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Removes local connection and OAuth states; marks pending imports FAILED. Already disconnected succeeds. Running import may finish; imported PDFs remain. Does not revoke consent at Google; users may revoke in Google account settings.
 
 ### 11.5 Get Google Picker configuration
-
-**Description:** Get Google Picker configuration. Controller: `GoogleDriveController`.
 
 **HTTP request**
 
@@ -2047,14 +1831,6 @@ GET /api/integrations/google-drive/picker
 ```
 
 **Authentication / authorization:** Authenticated. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -2101,15 +1877,11 @@ Content-Type: application/json
 | 409 | Connect Drive first. |
 | 503 | Picker missing configuration, Drive disabled or Google unavailable/rate-limited. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Keep response in memory only; Cache-Control: no-store. Contains short-lived Google access token, public restricted API key and project number, never refresh token or OAuth secret.
 
 ### 11.6 Queue Google Drive PDF import
-
-**Description:** Queue Google Drive PDF import. Controller: `GoogleDriveController`.
 
 **HTTP request**
 
@@ -2124,10 +1896,6 @@ POST /api/books/{bookId}/document/imports/google-drive
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -2189,15 +1957,11 @@ Content-Type: application/json
 | 404 | Private book not accessible or operation belongs to another account/book. |
 | 409 | No Drive connection or same operation reused for another file. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Location points to /api/books/{bookId}/document/imports/{operationUUID}. Replays existing operation even after disconnect. New job needs local connection. File accessibility, MIME, download permission, size and PDF validation happen asynchronously; acceptance is not proof of successful import. No public-library Drive import route.
 
 ### 11.7 Get Drive import status
-
-**Description:** Get Drive import status. Controller: `GoogleDriveController`.
 
 **HTTP request**
 
@@ -2213,10 +1977,6 @@ GET /api/books/{bookId}/document/imports/{importId}
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
 | importId | UUID | Yes | Import UUID owned by current account and book. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -2266,8 +2026,6 @@ Content-Type: application/json
 | 403 | Workspace account required. |
 | 404 | Book/import missing or import not owned by this account. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Poll Location until COMPLETED or FAILED; RUNNING/PENDING are nonterminal. Worker retries 503 failures up to three attempts with 30/60-second delays; recoverable running lease is 15 minutes. Asynchronous errors appear as message/status, while GET itself returns 200. Refetch active document/progress after completion because another replacement may have occurred.
@@ -2276,8 +2034,6 @@ Poll Location until COMPLETED or FAILED; RUNNING/PENDING are nonterminal. Worker
 
 ### 12.1 Subscribe to workspace events
 
-**Description:** Subscribe to workspace events. Controller: `BookNotificationController`.
-
 **HTTP request**
 
 ```http
@@ -2285,14 +2041,6 @@ GET /api/books/events
 ```
 
 **Authentication / authorization:** Workspace. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -2345,8 +2093,6 @@ Response Fields: SSE event name, id (cursor string), retry (milliseconds on read
 | 403 | Workspace account required. |
 | 503 | Per-instance capacity reached or service stopping. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Only current workspace events are delivered. Omit cursor for future events; 0 replays all retained workspace events. Initial ready event supplies cursor and retry: 3000. IDs are global opaque decimal strings with gaps. Heartbeat comments about every 15 seconds; connections expire after five minutes. Persist processed IDs and deduplicate replay; reconnect with backoff. Default capacity 200 per instance; default poll 1000ms. Cache-Control: no-cache, no-store; X-Accel-Buffering: no. Angular needs a fetch-based SSE client to send Authorization; no device/FCM push API.
@@ -2354,8 +2100,6 @@ Only current workspace events are delivered. Omit cursor for future events; 0 re
 ## 13. Public library
 
 ### 13.1 Get public PDF metadata
-
-**Description:** Get public PDF metadata. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -2370,10 +2114,6 @@ GET /api/public-books/{bookId}/document
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -2426,15 +2166,11 @@ Content-Type: application/json
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 | 404 | Book or active PDF not found in accessible library. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Only active version exposed. No storage path/provider/key in response. Cache-Control: no-store.
 
 ### 13.2 Read public PDF
-
-**Description:** Read public PDF. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -2500,15 +2236,11 @@ Response Fields: None (binary representation).
 | 416 | Invalid/unsatisfiable byte range; framework response, not guaranteed ApiError. |
 | 503 | Document storage/content unavailable. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 200 full PDF or 206 byte range with Content-Range. Streams Resource through Spring MVC. Headers: Content-Type application/pdf, Accept-Ranges bytes, ETag quoted document UUID, Content-Disposition inline/attachment with UTF-8 filename, Cache-Control no-store, X-Content-Type-Options nosniff. Every range request requires authentication. No signed URL returned. No application-specific If-Range processing is implemented; do not rely on it instead of documentId pinning.
 
 ### 13.3 Inspect public PDF headers
-
-**Description:** Inspect public PDF headers. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -2571,15 +2303,11 @@ Response Fields: None.
 | 409 | Pinned document was replaced. |
 | 503 | Document storage/content unavailable. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Same authorization and version checks as GET. Returns complete 64-bit Content-Length and PDF headers without opening a byte stream. Ignores Range. Response Body: None, including HEAD errors.
 
 ### 13.4 Get workspace-shared reading progress
-
-**Description:** Get workspace-shared reading progress. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -2594,10 +2322,6 @@ GET /api/public-books/{bookId}/reading-progress
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -2651,15 +2375,11 @@ Content-Type: application/json
 | 403 | Workspace account required. |
 | 404 | Book or active PDF not found. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 First open returns currentPage=0, pagesRead=0, progressPercentage=0.00, resumePage=1, version=0, lastReadAt=null, completed=false; no record is created by GET. totalPages is derived from active PDF. Cache-Control: no-store.
 
 ### 13.5 Save workspace-shared reading progress
-
-**Description:** Save workspace-shared reading progress. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -2674,10 +2394,6 @@ PUT /api/public-books/{bookId}/reading-progress
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -2747,15 +2463,11 @@ Content-Type: application/json
 | 404 | Book or active PDF not found. |
 | 409 | Revision conflict returns ReadingProgress; replaced PDF/reused operation returns ApiError. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 See reading synchronization rules below. Exact accepted-operation retry returns latest progress with 200, not necessarily the original snapshot, without new timestamp/revision. Completion never writes Book.completed. Cache-Control: no-store.
 
 ### 13.6 Batch workspace-shared reading summaries
-
-**Description:** Batch workspace-shared reading summaries. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -2764,10 +2476,6 @@ GET /api/public-books/reading-summaries
 ```
 
 **Authentication / authorization:** Workspace. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
 
 **Query parameters**
 
@@ -2849,15 +2557,11 @@ Content-Type: application/json
 | 403 | Workspace account required. |
 | 404 | Any requested ID is missing or outside accessible library/workspace. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Results ordered by bookId ascending. Entire request fails if any unique ID is inaccessible. No PDF => document=null and progress=null. PDF without saved progress => first-open progress. Cache-Control: no-store. This is batching, not pagination.
 
 ### 13.7 List or search public books
-
-**Description:** List or search public books. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -2866,10 +2570,6 @@ GET /api/public-books
 ```
 
 **Authentication / authorization:** Authenticated. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
 
 **Query parameters**
 
@@ -2926,15 +2626,11 @@ Content-Type: application/json
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Global catalogue across workspaces, but authentication required. Unpaginated, exact case-sensitive filters; both filters use AND; empty result []. Ordering not explicitly specified. Fetch reading-summaries separately for workspace progress.
 
 ### 13.8 Get public book
-
-**Description:** Get public book. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -2949,10 +2645,6 @@ GET /api/public-books/{bookId}
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3001,15 +2693,11 @@ Content-Type: application/json
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 | 404 | Missing public book or private book ID, even for its owner/Super Admin. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Identity and authorization are derived from the authenticated account; no client workspace selector is used.
 
 ### 13.9 Create public book
-
-**Description:** Create public book. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -3018,14 +2706,6 @@ POST /api/public-books
 ```
 
 **Authentication / authorization:** Super Admin. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3092,15 +2772,11 @@ Content-Type: application/json
 | 403 | Super Admin role required; security-filter body is not fixed. |
 | 409 | Duplicate exact author/title pair in public library. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Location points to public book detail. Public pair uniqueness is global and independent of private pairs. No book-count quota. No private book.created event; no client workspace selector.
 
 ### 13.10 Replace public book metadata
-
-**Description:** Replace public book metadata. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -3115,10 +2791,6 @@ PUT /api/public-books/{bookId}
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3186,15 +2858,11 @@ Content-Type: application/json
 | 404 | Public book not found. |
 | 409 | Duplicate public author/title pair. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Full BookRequest replacement; omitted completed becomes false and optional description can clear. Cannot change identity/library scope. Does not replace PDF or alter reading progress.
 
 ### 13.11 Delete public book
-
-**Description:** Delete public book. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -3209,10 +2877,6 @@ DELETE /api/public-books/{bookId}
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | bookId | Integer (int64) | Yes | Book in route-specific accessible library. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3252,15 +2916,11 @@ Response Fields: None.
 | 403 | Super Admin role required; security-filter body is not fixed. |
 | 404 | Public book not found, including repeated deletion. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Hard delete. Removes document metadata, workspace progress and operation receipts transactionally; durably queues all retained document files for asynchronous cleanup. Does not delete private books.
 
 ### 13.12 Upload or replace public PDF
-
-**Description:** Upload or replace public PDF. Controller: `PublicBookController`.
 
 **HTTP request**
 
@@ -3343,8 +3003,6 @@ Content-Type: application/json
 | 415 | Invalid extension or unsafe/invalid/encrypted PDF. |
 | 503 | Storage unavailable or validator busy. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Raw application/pdf, not multipart. No private book-count, PDF byte-size, page-count or workspace storage quotas on this route; infrastructure may impose limits. Same immutable versioning/retry rules as private upload. Required fileName is query parameter. Replay may reference inactive version; refetch active metadata. Location points to public document metadata; Cache-Control: no-store.
@@ -3353,8 +3011,6 @@ Raw application/pdf, not multipart. No private book-count, PDF byte-size, page-c
 
 ### 14.1 Request public library book
 
-**Description:** Request public library book. Controller: `PublicLibraryRequestController`.
-
 **HTTP request**
 
 ```http
@@ -3362,14 +3018,6 @@ POST /api/public-book-requests
 ```
 
 **Authentication / authorization:** Workspace. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3434,15 +3082,16 @@ Content-Type: application/json
 | 403 | Workspace account required. |
 | 409 | Existing public book or duplicate pending title/authorName request in current workspace. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
-Workspace and requester email derived from authentication. Title/authorName trimmed before duplicate check. New status PENDING. No Location header is explicitly set.
+Workspace and requester email derived from authentication. Title/authorName trimmed before duplicate check. New status PENDING. No Location header is explicitly set. The submission transaction
+enqueues an HTML/plain-text request email for every persisted SUPER_ADMIN account.
+The response does not wait for RabbitMQ publication or SMTP; a 201 confirms the request was persisted, not
+that notification email was delivered. Duplicate/invalid submissions create no
+additional email receipts. Without a provisioned Super Admin, the request still
+succeeds but no administrator email is queued.
 
 ### 14.2 List workspace book requests
-
-**Description:** List workspace book requests. Controller: `PublicLibraryRequestController`.
 
 **HTTP request**
 
@@ -3451,14 +3100,6 @@ GET /api/public-book-requests
 ```
 
 **Authentication / authorization:** Workspace. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3512,15 +3153,11 @@ Content-Type: application/json
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 | 403 | Workspace account required. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Current workspace history, newest createdAt first; unpaginated. Includes all statuses. No request status filter on this route.
 
 ### 14.3 List administrator book requests
-
-**Description:** List administrator book requests. Controller: `PublicLibraryRequestController`.
 
 **HTTP request**
 
@@ -3529,10 +3166,6 @@ GET /api/admin/public-book-requests
 ```
 
 **Authentication / authorization:** Super Admin. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
 
 **Query parameters**
 
@@ -3593,15 +3226,11 @@ Content-Type: application/json
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 | 403 | Super Admin role required; security-filter body is not fixed. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Global workspace requests, newest createdAt first; unpaginated.
 
 ### 14.4 Accept pending book request with PDF
-
-**Description:** Accept pending book request with PDF. Controller: `PublicLibraryRequestController`.
 
 **HTTP request**
 
@@ -3617,10 +3246,6 @@ POST /api/admin/public-book-requests/{requestId}/accept
 | --- | --- | --- | --- |
 | requestId | UUID | Yes | Public library book request ID. |
 
-**Query parameters**
-
-None.
-
 **Request headers**
 
 | Header | Type | Required | Description |
@@ -3634,7 +3259,7 @@ Multipart metadata={"publishedDate":"2018","description":"Java best practices","
 
 | Field | Type | Required | Validation / description |
 | --- | --- | --- | --- |
-| metadata | JSON multipart part | Yes | Part Content-Type application/json; object with the following metadata fields. |
+| metadata | JSON multipart part | Yes | JSON object, accepted as application/json or a plain form field; fields below. |
 | metadata.publishedDate | String | Yes | Nonblank; maximum 20 characters. |
 | metadata.description | String or null | No | Maximum 5000 characters. |
 | metadata.completed | Boolean or null | No | Omitted/null means false. |
@@ -3686,15 +3311,11 @@ Content-Type: application/json
 | 415 | File MIME/extension or PDF validation fails. |
 | 503 | Storage unavailable or validator busy. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Title/author are taken from pending request; remaining metadata supplied in JSON part. Creates public book and PDF, changes status to ACCEPTED. Failure rolls back decision/book and leaves request pending. Servlet private multipart size caps apply, but public document service has no private page/storage quota. Persists reviewed SSE event and retryable email outbox transactionally. Cannot process again.
 
 ### 14.5 Reject pending book request
-
-**Description:** Reject pending book request. Controller: `PublicLibraryRequestController`.
 
 **HTTP request**
 
@@ -3709,10 +3330,6 @@ POST /api/admin/public-book-requests/{requestId}/reject
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | requestId | UUID | Yes | Public library book request ID. |
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3767,8 +3384,6 @@ Content-Type: application/json
 | 404 | Request not found. |
 | 409 | Request already reviewed. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Changes status to REJECTED with no bookId. Persists reviewed SSE notification and retryable email outbox transactionally. A second review returns 409; no rejection-reason request field.
@@ -3777,8 +3392,6 @@ Changes status to REJECTED with no bookId. Persists reviewed SSE notification an
 
 ### 15.1 Check service health
 
-**Description:** Check service health. Controller: `Spring Boot Actuator`.
-
 **HTTP request**
 
 ```http
@@ -3786,14 +3399,6 @@ GET /actuator/health
 ```
 
 **Authentication / authorization:** No. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3833,15 +3438,11 @@ Content-Type: application/json
 | --- | --- |
 | 503 | Aggregate unhealthy/out-of-service status; health object rather than ApiError. |
 
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
-
 **Business / implementation notes**
 
 Only health is exposed by management configuration; show-details=never. Representative healthy response shown with Accept: application/json; Actuator may negotiate its vendor JSON media type when that header is omitted. Deployment health status may differ.
 
 ### 15.2 Legacy root mapping (denied)
-
-**Description:** Legacy root mapping (denied). Controller: `HomeController`.
 
 **HTTP request**
 
@@ -3850,14 +3451,6 @@ GET /
 ```
 
 **Authentication / authorization:** Denied. See access-label definitions in section 2.
-
-**Path parameters**
-
-None.
-
-**Query parameters**
-
-None.
 
 **Request headers**
 
@@ -3889,8 +3482,6 @@ Response Fields: None.
 | --- | --- |
 | 401 | Anonymous request rejected by security. |
 | 403 | Authenticated request denied by anyRequest().denyAll(). |
-
-Application errors use [ApiError](#application-error-format), except the explicitly described security, range, HEAD, progress-conflict and health responses. Common malformed-body/media-type and generic 500 handling are described in section 3.
 
 **Business / implementation notes**
 
@@ -3938,7 +3529,16 @@ Only `drive.file` scope is requested. PKCE/state/browser binding protect the cal
 
 ### Public request review
 
-Workspace POST request → admin GET pending requests → admin accept with metadata/PDF or reject → workspace GET history / receive reviewed SSE event. Only PENDING can transition to ACCEPTED/REJECTED. Acceptance creates the public book atomically with decision; failures leave pending state. Committed decisions enqueue requester email for retryable SMTP delivery; synchronous review success is not proof of email delivery. The worker uses SMTP and PASSWORD_RESET_FROM, polls every 30 seconds by default, and delivers at least once; failed delivery retains the outbox receipt.
+Workspace POST request → admin GET pending requests → admin accept with metadata/PDF or reject → workspace GET history / receive reviewed SSE event. Only PENDING can transition to ACCEPTED/REJECTED. Acceptance creates the public book atomically with decision; failures leave pending state. Committed submissions enqueue professional HTML/plain-text administrator request
+notifications using persisted SUPER_ADMIN account emails, independent of bootstrap
+environment values. Committed decisions enqueue separate requester email for retryable SMTP delivery; synchronous review success is not proof of email delivery. The bounded publisher polls PostgreSQL every second by default and confirms durable
+RabbitMQ publication of opaque receipt IDs. A single active consumer with prefetch 1
+sends one request/decision email at a time across replicas, using SMTP and
+PASSWORD_RESET_FROM. Failures use delayed exponential retries (30-second initial
+delay, five attempts by default); exhausted receipts remain parked in PostgreSQL.
+Broker outage/saturation leaves receipts pending. Delivery is at least once;
+HTTP success is not proof of broker publication or email delivery. See
+[queue configuration and recovery](docs/request-email-queue.md).
 
 ### SSE payloads
 
@@ -3978,47 +3578,25 @@ Public request decision data uses schemaVersion 1:
 
 Rejection uses REJECTED, null bookId and the rejection message. IDs are opaque strings to avoid client numeric precision issues. Record the SSE id after processing, handle duplicates and reconnect with Last-Event-ID. No automatic event-retention policy or OS push registration is exposed.
 
-## 17. Configuration, discrepancies and maintenance
+## 17. Configuration and maintenance
 
-### API-related runtime settings
+Runtime settings, secret requirements and defaults are maintained in
+[operations](docs/operations.md#configuration). File handling and Drive setup are
+covered in [PDF reading](docs/book-reading.md).
 
-| Environment variable | Default / effect |
-| --- | --- |
-| PORT | 8080. |
-| JWT_SECRET | Required base64 key, at least 32 decoded random bytes; stable across replicas. |
-| JWT_ACCESS_TTL / JWT_REFRESH_TTL | PT15M / P7D; positive access lifetime, refresh longer than access. |
-| CORS_ALLOWED_ORIGINS | http://localhost:4200; comma-separated browser origins. |
-| BOOK_MAX_FILE_SIZE | 200MB; private stored upload limit and servlet multipart file limit. |
-| BOOK_MAX_REQUEST_SIZE | 201MB; servlet multipart request cap, including admin request acceptance. |
-| BOOK_MAX_PAGES | 20000; private PDF page limit. |
-| BOOK_WORKSPACE_STORAGE_LIMIT | 5GB; private stored versions all count. |
-| BOOK_STORAGE_DIRECTORY | ./data/books; protected local file storage. |
-| SSE_MAX_CONNECTIONS / SSE_POLL_MILLIS | 200 / 1000 per instance. |
-| GOOGLE_DRIVE_ENABLED | false; opt-in integration. |
-| GOOGLE_DRIVE_CLIENT_ID / CLIENT_SECRET / REDIRECT_URI | Required configured OAuth values when enabled; exact callback URI. |
-| GOOGLE_DRIVE_ENCRYPTION_KEY | Base64 32-byte key when enabled. |
-| GOOGLE_DRIVE_PICKER_API_KEY / PROJECT_NUMBER | Picker configuration; accessToken/apiKey/appId returned by picker endpoint. |
-| SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD | Initial provisioning only; existing admin passwords not reset. |
-| SMTP_HOST / PORT / USERNAME / PASSWORD | Host blank by default; port 587; mail delivery configuration. |
-| SMTP_AUTH / SMTP_STARTTLS | true / true (STARTTLS required when enabled). |
-| PASSWORD_RESET_FROM / PASSWORD_RESET_URL | Sender and client reset-page URL; required for configured reset delivery. URL must use HTTPS and have no fragment; email adds token as a query parameter. |
-| PASSWORD_RESET_TTL | PT30M; positive and at most 24 hours. |
+### Contract limits
 
-Google variable names in grouped rows retain the `GOOGLE_DRIVE_` prefix for every suffix. Database configuration is PostgreSQL via DATABASE_URL/USERNAME/PASSWORD with Flyway migrations and Hibernate schema validation; see README deployment instructions. No custom API rate-limit headers or general distributed rate limiter is implemented. Forgot-password has the account cooldown described above.
-
-PDF validation checks extension/MIME, `%PDF-` signature, PDFBox parsing, nonzero page count, encryption, scripts/attachments/open actions and other active content, with bounded traversal and two simultaneous parser permits. Filename sanitation removes path prefixes, replaces control characters and trims whitespace; result must be 1–255 characters. Generated storage keys are independent of filenames. These checks do not establish antivirus scanning or a separate-process parser sandbox. Failed replacement preserves the prior active document.
-
-Public raw PDF uploads bypass private file/page/storage quotas; reverse-proxy and physical storage limits still depend on deployment. Admin request acceptance remains multipart and subject to configured servlet size limits. Persistent protected file storage and database backups are both needed. Current storage is LOCAL; S3/R2/MinIO implementations and signed URL APIs are absent. Multiple replicas need access to the same persisted document content. Disable proxy buffering for SSE and permit its five-minute connections.
-
-### Reconciled documentation differences and limits
-
-- Older api.md denied password APIs existed; actual PasswordController implements change/forgot/reset. README's opening feature exclusions still say password recovery is absent, while its later password section describes the implementation. The endpoints above follow current code.
-- Older README references 38 operations and Swagger metadata 2.0.0; current controllers expose 43 business operations and OpenApiConfig uses 2.1.0. Historical documentation test counts are not current verification results.
-- Root GET is mapped and documented by Swagger, but SecurityConfig denies it. It is inventoried explicitly without presenting its unreachable greeting as a successful API.
-- OpenAPI callback annotations mention Google denial (403); ordinary Google consent cancellation without code follows the service's missing-code 400 path. Only state/code/cookie are consumed by the controller.
-- Some Swagger responses use generic Maps or unconstrained objects. Workspace/Drive field names above come from the returned maps/services; no guessed envelopes or fields are added. Authentication annotations can describe ApiError for service-level 401, but security-filter 401/403 bodies are not fixed by controller advice.
-- No pagination, full-text search, private book update/delete, historical PDF management, customer billing/membership/invite or arbitrary Google URL download API exists. Manual private completed changes after creation cannot be persisted through an exposed metadata update API.
-- Production host, proxy limits, exact framework security/range error bodies, live Google/SMTP deployment behavior, and actual Android/Angular integration behavior are not determinable from this backend contract. No live external service verification was performed for this documentation update.
+- Root GET is mapped and documented, but denied by security; use public health.
+- OAuth cancellation without a code follows the missing-code 400 path. The callback
+  consumes state/code/browser cookie and does not accept a native access token.
+- Security-filter failures do not use controller advice. Progress 409 responses have
+  two body shapes; HEAD is bodyless and Range errors use framework handling.
+- No pagination, full-text search, private metadata update/delete, historical PDF
+  management, billing/invite or arbitrary Google URL import endpoint exists.
+- Public raw uploads bypass private quotas. Request acceptance uses multipart caps.
+  LOCAL replicas need shared protected storage; no signed URL API exists.
+- Production proxy limits, live Google/SMTP behavior and client implementation status
+  require deployment/client verification beyond this backend contract.
 
 ### Source map and maintaining this reference
 
@@ -4035,8 +3613,8 @@ Public raw PDF uploads bypass private file/page/storage quotas; reverse-proxy an
 | Security/errors/OpenAPI | config/SecurityConfig.java, OpenApiConfig.java; exception/GlobalExceptionHandler.java; dto/ApiError.java. |
 | Runtime configuration | src/main/resources/application.properties; src/main/resources/db/migration/. |
 
-Java paths in this table are relative to `src/main/java/com/parvez/android/`. Source contracts were cross-checked against existing test cases including OpenApiCoverageTest (43 business mappings), TokenAuthenticationTest, PasswordManagementTest, WorkspaceIsolationTest, BookReadingIntegrationTest, BookDocumentHeadTest, ReadingCompletionTest, PublicLibraryIntegrationTest, PublicUploadHttpTest, PublicLibraryRequestIntegrationTest, GoogleDriveIntegrationTest/GatewayTest, and notification controller/stream/persistence tests. Reviewing test source is not a claim that tests were rerun for this documentation change.
+Java paths in this table are relative to `src/main/java/com/parvez/android/`. Source contracts were cross-checked against existing test cases including OpenApiCoverageTest (43 business mappings), TokenAuthenticationTest, PasswordManagementTest, WorkspaceIsolationTest, BookReadingIntegrationTest, BookDocumentHeadTest, ReadingCompletionTest, PublicLibraryIntegrationTest, PublicUploadHttpTest, PublicLibraryRequestIntegrationTest, GoogleDriveIntegrationTest/GatewayTest, and notification controller/stream/persistence tests. Tests check route coverage; they do not establish live provider or frontend behavior.
 
 When adding/changing routes, compare this inventory to all Spring mappings, security rules, DTO validation, service behavior and generated `/v3/api-docs`. Existing database-backed OpenApiCoverageTest compares Swagger to Spring's handler registry. Use a dedicated disposable PostgreSQL database for integration tests as explained in [README.md](README.md); tests mutate data.
 
-Further feature/deployment background: [PDF reading](docs/book-reading.md), [notifications](docs/book-notifications.md), [public library](docs/public-library.md), [book requests](docs/public-library-requests.md), [password management](docs/password-management.md). Historical phase/test reports in those files should not override the current implementation or this source-reviewed contract.
+Further feature/deployment background: [PDF reading](docs/book-reading.md), [notifications](docs/book-notifications.md), [public library](docs/public-library.md), [book requests](docs/public-library-requests.md), [password management](docs/password-management.md). These guides document design and operational constraints; the route contracts above describe current behavior.

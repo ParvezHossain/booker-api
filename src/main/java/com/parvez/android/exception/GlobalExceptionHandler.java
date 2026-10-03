@@ -41,11 +41,11 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
 
-        log.error(
+        // PostgreSQL diagnostics may include failing-row values; do not log the exception or its causes.
+        log.warn(
                 "Database constraint violation on {} {}",
                 request.getMethod(),
-                request.getRequestURI(),
-                exception
+                request.getRequestURI()
         );
 
         String message = "The requested operation violates a database constraint";
@@ -120,6 +120,19 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Unsupported content type", request);
     }
 
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> handleUnsupportedMethod(
+            org.springframework.web.HttpRequestMethodNotSupportedException exception, HttpServletRequest request) {
+        var response = buildError(HttpStatus.METHOD_NOT_ALLOWED, "Unsupported request method", request);
+        return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
+                .headers(exception.getHeaders()).body(response.getBody());
+    }
+
+    @ExceptionHandler(org.springframework.web.HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ApiError> handleUnacceptableMedia(HttpServletRequest request) {
+        return buildError(HttpStatus.NOT_ACCEPTABLE, "Requested response content type is not supported", request);
+    }
+
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
     public ResponseEntity<ApiError> handleMissingRoute(HttpServletRequest request) {
         return buildError(HttpStatus.NOT_FOUND, "Resource not found", request);
@@ -177,7 +190,7 @@ public class GlobalExceptionHandler {
             String message = cause.getMessage();
 
             if (message != null &&
-                    message.toLowerCase()
+                    message.toLowerCase(java.util.Locale.ROOT)
                             .contains(constraint)) {
                 return true;
             }

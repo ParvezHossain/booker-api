@@ -34,7 +34,6 @@ class OpenApiCoverageTest {
         String json = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         specification = JsonMapper.builder().build().readTree(json);
-        Files.writeString(Path.of("/tmp/booker-openapi-refactor.json"), json);
     }
 
     @Test void everyApplicationMappingHasExplicitDocumentation() {
@@ -64,6 +63,30 @@ class OpenApiCoverageTest {
             }
         }
         assertEquals(43, operations, "Update the client inventory when adding an API");
+    }
+
+    @Test void markdownInventoryMatchesApplicationRoutesAndHealth() throws Exception {
+        String markdown = Files.readString(Path.of("API.md"));
+        String inventory = markdown.substring(markdown.indexOf("## 5. Endpoint inventory"),
+                markdown.indexOf("## 6. Authentication and passwords"));
+        var pattern = java.util.regex.Pattern.compile("(?m)^\\| (GET|HEAD|POST|PUT|DELETE|PATCH) \\| `([^`]+)` \\|");
+        var matcher = pattern.matcher(inventory);
+        var documented = new java.util.TreeSet<String>();
+        while (matcher.find()) {
+            String route = matcher.group(1) + " " + matcher.group(2);
+            assertTrue(documented.add(route), "Duplicate documented route: " + route);
+        }
+        var implemented = new java.util.TreeSet<String>();
+        for (var entry : mappings.getHandlerMethods().entrySet()) {
+            if (!entry.getValue().getBeanType().getPackageName().startsWith("com.parvez.android")) continue;
+            for (String path : entry.getKey().getPathPatternsCondition().getPatternValues()) {
+                for (var method : entry.getKey().getMethodsCondition().getMethods()) {
+                    implemented.add(method.name() + " " + path);
+                }
+            }
+        }
+        implemented.add("GET /actuator/health");
+        assertEquals(implemented, documented, "Keep API.md synchronized with controller mappings");
     }
 
     @Test void authenticationAndRecoveryDocumentSecurityAndSecrets() {

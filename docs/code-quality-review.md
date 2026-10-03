@@ -1,47 +1,153 @@
-# Backend design and documentation review
+# Backend architecture and engineering review
 
-Review date: 2026-09-30. Scope: this Spring Boot backend, all application controller mappings, account/JWT/password security, private/public books, PDF validation/storage, reading progress, notifications, Google Drive, repositories/DTOs, configuration, Flyway migrations, API references and tests. Native Android source is not in this repository; the adjacent Angular application is outside this refactor.
+This guide describes implemented boundaries and known limitations. Future changes
+are tracked in [the engineering backlog](../PROMPTS.md). Runtime setup, migrations
+and verification commands are maintained in [operations](operations.md).
 
-## Architecture and decisions
+## System boundary
 
-The existing controller → service → JPA/JDBC structure is retained. PostgreSQL/Flyway owns relational invariants. Services own authorization, transaction boundaries and workflows. `FileStorageService` separates document workflows from byte storage. Controllers remain HTTP adapters; immutable response records omit storage paths and Google refresh secrets.
+Booker is a Java 25/Spring Boot MVC service backed by PostgreSQL. The repository
+contains no client application. Controllers adapt HTTP requests to service methods;
+services enforce authorization/business rules and transaction boundaries. JPA owns
+book metadata queries; JDBC handles account, document, progress, event and queue
+persistence. Flyway owns schema evolution; Hibernate only validates it.
 
-| Principle | Concrete application |
-|---|---|
-| Single responsibility | `WorkspaceController` moved out of `WorkspaceAccounts`; `GoogleDriveConfiguration` moved out of `GoogleDriveSettings`. `PasswordService` owns token lifecycle; `SmtpPasswordResetDelivery` owns email configuration, formatting and transport. |
-| Open/closed and dependency inversion | Password recovery depends on the small `PasswordResetDelivery` interface. Another delivery adapter can implement that contract without rewriting password workflows. Existing `FileStorageService` remains the storage boundary. |
-| Interface segregation and substitution | Delivery exposes only readiness and sending, with a documented provider-acceptance/failure contract. Existing storage implementations retain streaming, opaque-key and idempotent-delete requirements. No unrelated methods or speculative generic interfaces were added. |
-| DRY | `BookMapper.applyMetadata` is shared by private create and public create/update. `OpaqueTokens` centralizes random secrets and SHA-256 for reset, refresh and OAuth state/PKCE. Authorized document lookups share active-document resolution. |
-| KISS | Existing services, request/response JSON, routes, role/workspace scopes, JDBC/JPA persistence, transaction boundaries and migrations are preserved. No generic CRUD framework, new dependency or architecture replacement was introduced by this refactor. |
+```mermaid
+flowchart LR
+    Client[HTTP clients] --> Security[Spring Security]
+    Security --> Controller[Controllers and validation]
+    Controller --> Service[Feature services]
+    Service --> Database[(PostgreSQL / JPA and JDBC)]
+    Service --> Storage[FileStorageService / LOCAL]
+    Service --> Google[Fixed Google OAuth and Drive endpoints]
+    Worker[Scheduled workers] --> Database
+    Worker --> Storage
+    Worker --> Broker[RabbitMQ email receipt IDs]
+    Broker --> Consumer[Single active SMTP consumer]
+    Consumer --> Mail[SMTP delivery]
+    Events[SSE virtual-thread workers] --> Database
+    Events --> Client
+```
 
-`OpaqueTokens` is for high-entropy bearer secrets. User passwords continue to use salted PBKDF2 through the existing encoder. File checksums still use streaming digest updates rather than buffering PDF content into a string utility.
+No application cache exists. RabbitMQ is used for bounded request/decision email delivery;
+other durable workflows remain in PostgreSQL. Durable events, import jobs,
+mail receipts and deletion receipts live in PostgreSQL. JobRunr and telemetry starters
+are dependencies; their presence does not establish application JobRunr jobs, public
+job dashboards or production alerting. The LGTM Compose service is local tooling.
 
-## Comments and invariants
+## Responsibilities
 
-Comments explain decisions that would otherwise be easy to break:
+| Area | Main boundary |
+| --- | --- |
+| Signup/workspace | `WorkspaceController` is the HTTP adapter; `WorkspaceAccounts` provisions/loads principals |
+| Sessions | `TokenService` issues/rotates tokens and checks database credential versions |
+| Passwords | `PasswordService` manages tokens/revocation; `PasswordResetDelivery` separates mail transport |
+| Books | Private `BookService` and public `PublicBookService` share metadata mapping but retain distinct permissions/quotas |
+| Documents | `BookDocumentService` authorizes, validates and activates immutable document metadata |
+| Byte storage | `FileStorageService` streams bytes through opaque provider-generated keys |
+| Reading | `ReadingProgressService` shares rules through a closed account/workspace scope enum |
+| Drive | Connection/cipher/gateway/import services separate state, encryption, HTTP transport and queued work |
+| Email queue | Bounded confirmed publisher, single active RabbitMQ consumer, database retry/failed receipts |
+| Requests | `PublicLibraryRequestService` reviews requests and commits notification/mail receipts atomically |
+| Notifications | Event store plus bounded virtual-thread SSE workers deliver workspace-scoped replay |
+| Errors | `GlobalExceptionHandler` maps application/framework request errors to safe status-aware responses |
 
-- Account locks serialize token issuance with password replacement; pre-V11 JWTs are treated as credential version zero.
-- Metadata mapping never copies client ownership or library scope.
-- PDF parsing happens outside database transactions, keeping locks short.
-- Progress SQL identifiers come only from a closed scope enum; private-account and public-workspace records remain separate.
-- PDF object traversal handles cycles and bounds work; local file publication is atomic.
-- Google credentials are authenticated against their account using AES-GCM additional data.
-- Failed SMTP delivery invalidates the token but retains its timestamp for the cooldown; provider exception text and reset secrets are not logged.
+Records/DTOs expose only client data. Internal storage provider/keys and encrypted
+Google credentials never appear in responses. `OpaqueTokens` centralizes random
+bearer secrets and digests; passwords use salted PBKDF2 instead of SHA-256.
 
-## Swagger coverage
+## Persistence model
 
-Login, refresh, logout and the retained root mapping now have explicit operation documentation. Password request schemas mark credentials and reset tokens write-only. The root mapping stays denied by security; its documentation identifies it as a disabled legacy route. Public Actuator health is documented programmatically because its handler is provided by Spring.
+| Table family | Identity and scope |
+| --- | --- |
+| `workspaces`, `workspace_users` | Workspace UUID; globally normalized email account key; OWNER has workspace, SUPER_ADMIN has none |
+| `books` | BIGINT identity; PRIVATE has workspace, PUBLIC has none; exact author/title uniqueness per applicable scope |
+| `book_documents` | Immutable UUID versions with provider/key, size/hash/pages/source; one active version per book |
+| `reading_progress`, operations | Account/book primary key; account/operation retry identity; document/book foreign keys |
+| `public_reading_progress`, operations | Workspace/book primary key and workspace/operation retry identity |
+| `refresh_tokens`, `password_reset_tokens` | Hashed secrets with expiry; reset row unique per account; account credential version invalidates JWTs |
+| `google_drive_*` | Encrypted account connections, expiring hashed browser states and durable import jobs |
+| `book_events`, cursor | Workspace events allocated by a commit-ordered transactional counter |
+| `public_library_book_requests`, `public_request_emails` | Workspace request audit and committed typed administrator/requester email receipts with UUID publication/retry/failed state |
+| `document_file_deletions` | Durable opaque-key cleanup receipts independent of deleted metadata |
 
-Several controller-level error annotations previously suppressed success responses or caused errors to inherit success DTOs. Explicit success schemas and ApiError schemas correct those contracts. Private/public PDF GET responses are `application/pdf` binary, document Range headers and 206/416 behavior; HEAD success and errors have no response body. Both reading-progress 409 shapes remain documented. Drive operations include status codes, authentication, scopes, callback behavior and request constraints.
+The migration sequence and populated-upgrade requirements are in
+[operations](operations.md#database-migrations-and-upgrades). No migration rollback
+files exist; coordinated backup restoration or a forward fix is required.
 
-`OpenApiCoverageTest` compares generated OpenAPI with Spring's application handler registry. It checks all 38 business operations, explicit summaries/tags, success status codes, public/protected security, password schema secrecy, PDF Range/binary/HEAD behavior, upload error schemas, and both progress conflict bodies. Framework Swagger assets are documentation infrastructure rather than additional business operations.
+## Transaction and concurrency invariants
 
-## Maintenance guidance
+- Login/refresh/password mutations lock the same account row. Password replacement
+  increments credential version and removes reset/refresh sessions transactionally.
+- Private creation locks its workspace for quota and uniqueness checks. The insert
+  trigger writes an event before commit; rollback exposes neither book nor event.
+- Document replacement/progress writes lock the authorized book. Metadata activation
+  deactivates the old version and creates a new version within one transaction.
+- Private uploads additionally lock workspace storage accounting; all retained versions
+  count. Bytes are staged/validated before normal upload activation.
+- Request submission snapshots every persisted Super Admin recipient into the outbox
+  in the request transaction. Escaped HTML and plain-text notification bodies are
+  stored together; bootstrap email configuration is not the runtime recipient source.
+- Request acceptance currently holds its outer transaction and request lock during
+  storage/parsing. It creates the book, activates PDF, records decision/event/email
+  together. Rollback synchronization deletes retained upload bytes on database rollback;
+  process crashes/failed cleanup still require orphan reconciliation.
+- Progress uses optimistic server revisions and durable operation receipts. Stale
+  updates may merge maximum page without moving resume/lastReadAt. Exact accepted
+  retries return current state without another mutation. Client clocks are not trusted.
+- Event allocation locks a global counter to maintain commit order. Polling filters
+  by workspace; IDs may have gaps. Public catalogue writes do not emit private book events.
+- The bounded email publisher locks due receipts with SKIP LOCKED and records confirmed
+  RabbitMQ publication. The single active consumer locks one receipt, sends SMTP and
+  commits deletion or delayed retry before acknowledgement; a crash before commit can
+  duplicate delivery. Failed receipts are parked after the configured attempt limit. Drive workers claim a recoverable lease.
+  File deletion is idempotent and its receipt persists until successful deletion.
 
-Add shared logic where behavior is actually identical. Private quotas, Super Admin management and workspace/user progress ownership have different rules and remain explicit. Preserve account/book lock order and retry identity when changing transactional code. Extend the storage/delivery boundaries for new providers rather than embedding provider APIs in business workflows.
+## Security and HTTP boundaries
 
-SMTP remains synchronous as before: sending can hold the account transaction for the configured timeout. A durable mail outbox would be a separate reliability feature with its own migration and delivery semantics. Local storage and external-service credentials remain deployment choices described in the feature guides. This review does not verify a live SMTP/Google account or frontend behavior.
+Spring Security supports stateless Bearer and legacy Basic. Authorization is checked
+again in services so internal workflows use the same scopes. CORS is configurable,
+without cross-origin credentials. OAuth requires same-browser binding, one-time state,
+PKCE and an exact callback; stored credentials use account-bound AES-GCM. Upstream
+hosts are fixed, redirect following is disabled and error inspection is bounded.
 
-## Verification
+PDF validation checks extension, MIME/signature, parsed page count, encryption and
+unsafe actions/scripts/attachments with bounded traversal and parser admission.
+LOCAL storage streams with a fixed buffer and atomically publishes generated UUID
+files; downloads reject symlinks. It is not a malware scanner or parser sandbox.
 
-Final Maven `package` verification passed against an isolated PostgreSQL 18 database: **105 tests, 0 failures, 0 errors, 0 skipped**. This includes private/public library isolation, upload/streaming/Range limits, quotas, progress concurrency/idempotency, notification replay, password revocation/recovery, SMTP adapter behavior, Google OAuth/imports and migration regressions. Four new OpenAPI coverage tests and two SMTP adapter tests protect the refactored boundaries. Generated Swagger was inspected alongside the handler registry. `git diff --check` passed. V1–V10 were compared byte-for-byte with committed migrations; V11 keeps the earlier password feature schema. No configured lint/static-analysis plugin or frontend suite was added or run.
+Application errors use `ApiError`, including 405/Allow and 406 for framework request
+failures. Constraint diagnostics are not logged with exception causes because the
+driver can include failing-row values. Security-filter responses, HEAD, byte-range
+errors and revision-conflict 409 have their own documented body rules. Unexpected
+server errors retain diagnostic context in access-controlled logs.
+
+## Known limitations
+
+Lists and request history are unpaginated. SSE polling scales per connection and
+existing streams are not continuously reauthenticated. There is no event/receipt/
+version retention policy, shared rate limiter or object-store provider. LOCAL
+replicas need shared storage. Reset SMTP holds the account transaction; request/decision
+mail uses RabbitMQ with bounded retries, but SMTP still holds a receipt transaction.
+The publisher has a separate scheduler; remaining scheduled workers share the default
+scheduler, so long work can still delay other jobs. Sustained overload can grow the
+PostgreSQL outbox despite bounded broker queues. Import leases lack heartbeat/fencing. Public raw uploads have no private
+file/page/storage quota. Live Google/SMTP and client behaviors need separate checks.
+
+These limits are documented rather than disguised as implemented infrastructure.
+Prioritized requirements and acceptance tests are in [PROMPTS.md](../PROMPTS.md).
+
+## Verification expectations
+
+`OpenApiCoverageTest` checks all 43 business operations, generated success/error
+schemas, auth visibility, PDF Range/binary/HEAD and both progress 409 shapes. It also
+compares `API.md`'s inventory with registered application routes and public health.
+The fixed `/tmp` OpenAPI export is removed from test execution; clients can download
+`/v3/api-docs` from their target deployment.
+
+Behavioral tests cover database invariants, tenant/role isolation, sessions/passwords,
+PDF failures and large HEAD, revisions/retries/concurrency, request rollback, mail
+receipts and simulated Google calls. Full verification requires disposable PostgreSQL, RabbitMQ
+and the opt-in event JDBC variable. CI rejects skipped tests and builds Docker after
+Maven verification. Local passing tests do not prove live provider delivery, frontend
+implementation, production performance or restore readiness.

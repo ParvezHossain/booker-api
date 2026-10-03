@@ -64,13 +64,61 @@ class PublicLibraryRequestIntegrationTest {
         mvc.perform(get("/api/admin/public-book-requests").with(user(owner))).andExpect(status().isForbidden());
         mvc.perform(get("/api/admin/public-book-requests").with(user(admin)).param("status","PENDING")).andExpect(status().isOk());
     }
+    @Test void submissionQueuesAdminEmailsAtomicallyAndDoesNotDuplicateOnConflict() {
+        var request = submit();
+        var receipt = jdbc.queryForMap("SELECT * FROM public_request_emails WHERE request_id=? AND email_type='SUBMISSION' AND recipient=?",
+                request.id(), admin.getUsername());
+        assertEquals("New public library book request | Booker", receipt.get("subject"));
+        assertTrue(receipt.get("message").toString().contains(owner.getUsername()));
+        assertTrue(receipt.get("html_message").toString().contains(request.title()));
+        assertTrue(receipt.get("html_message").toString().contains("Requests"));
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=? AND recipient=?",
+                Integer.class, request.id(), owner.getUsername()));
+        assertEquals(jdbc.queryForObject("SELECT count(*) FROM workspace_users WHERE role='SUPER_ADMIN'", Integer.class),
+                jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=? AND email_type='SUBMISSION'", Integer.class, request.id()));
+        var before = jdbc.queryForList("SELECT * FROM public_request_emails WHERE request_id=? ORDER BY recipient", request.id());
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                () -> requests.submit(new PublicLibraryRequestService.Submit(request.title(), request.authorName())));
+        assertEquals(before, jdbc.queryForList("SELECT * FROM public_request_emails WHERE request_id=? ORDER BY recipient", request.id()));
+        authenticate(admin);
+        requests.reject(request.id());
+        assertEquals(before, jdbc.queryForList("SELECT * FROM public_request_emails WHERE request_id=? AND email_type='SUBMISSION' ORDER BY recipient", request.id()));
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=? AND email_type='DECISION'", Integer.class, request.id()));
+    }
+
+    @Test void submissionRollbackRemovesRequestAndEveryAdminReceipt() {
+        authenticate(owner);
+        var id = new java.util.concurrent.atomic.AtomicReference<UUID>();
+        transaction.executeWithoutResult(status -> {
+            var request = requests.submit(new PublicLibraryRequestService.Submit("Rollback " + UUID.randomUUID(), "Author"));
+            id.set(request.id());
+            assertTrue(jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?", Integer.class, request.id()) > 0);
+            status.setRollbackOnly();
+        });
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM public_library_book_requests WHERE id=?", Integer.class, id.get()));
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?", Integer.class, id.get()));
+    }
+
+    @Test void submissionWithoutProvisionedAdminStillPersistsRequest() {
+        authenticate(owner);
+        transaction.executeWithoutResult(status -> {
+            // Remove admin roles only inside this rolled-back, isolated test transaction.
+            jdbc.update("UPDATE workspace_users SET role='OWNER', workspace_id=? WHERE role='SUPER_ADMIN'", WorkspacePrincipal.currentWorkspace());
+            var request = requests.submit(new PublicLibraryRequestService.Submit("No admin " + UUID.randomUUID(), "Author"));
+            assertEquals("PENDING", request.status());
+            assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM public_library_book_requests WHERE id=?", Integer.class, request.id()));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?", Integer.class, request.id()));
+            status.setRollbackOnly();
+        });
+    }
+
     @Test void rejectionPersistsDecisionNotificationsAndPreventsTransitions() throws Exception {
         var request = submit();
         mvc.perform(post("/api/admin/public-book-requests/{id}/reject",request.id()).with(user(owner))).andExpect(status().isForbidden());
         mvc.perform(post("/api/admin/public-book-requests/{id}/reject",request.id()).with(user(admin)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REJECTED"));
         mvc.perform(post("/api/admin/public-book-requests/{id}/reject",request.id()).with(user(admin))).andExpect(status().isConflict());
-        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?",Integer.class,request.id()));
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=? AND email_type='DECISION'",Integer.class,request.id()));
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM book_events WHERE workspace_id=? AND payload::jsonb->>'requestId'=?",Integer.class,request.workspaceId(),request.id().toString()));
         authenticate(admin);
         assertThrows(org.springframework.web.server.ResponseStatusException.class,
@@ -92,7 +140,7 @@ class PublicLibraryRequestIntegrationTest {
             assertNotEquals(first.get(), second.get());
         }
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM book_events WHERE payload::jsonb->>'requestId'=?", Integer.class, request.id().toString()));
-        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?", Integer.class, request.id()));
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=? AND email_type='DECISION'", Integer.class, request.id()));
     }
     @Test void outerRollbackRemovesStoredPdfAndLeavesPendingRequest() throws Exception {
         var request = submit();
@@ -110,7 +158,7 @@ class PublicLibraryRequestIntegrationTest {
             } catch(IOException ex) { throw new java.io.UncheckedIOException(ex); }
         });
         assertFalse(storage.exists(key.get()));
-        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?", Integer.class, request.id()));
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=? AND email_type='DECISION'", Integer.class, request.id()));
         authenticate(owner);
         assertEquals("PENDING",requests.own().stream().filter(r -> r.id().equals(request.id())).findFirst().orElseThrow().status());
     }
@@ -130,7 +178,7 @@ class PublicLibraryRequestIntegrationTest {
                 .file(new MockMultipartFile("file","book.pdf","application/pdf",bytes)).with(user(admin)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ACCEPTED")).andExpect(jsonPath("$.bookId").isNumber());
         assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM books b JOIN book_documents d ON d.book_id=b.id WHERE b.library_type='PUBLIC' AND b.title=?",Integer.class,request.title()));
-        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?",Integer.class,request.id()));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=? AND email_type='DECISION'",Integer.class,request.id()));
         mvc.perform(multipart("/api/admin/public-book-requests/{id}/accept",request.id()).file(metadata())
                 .file(new MockMultipartFile("file","book.pdf","application/pdf",bytes)).with(user(admin))).andExpect(status().isConflict());
         mvc.perform(post("/api/admin/public-book-requests/{id}/reject",request.id()).with(user(admin))).andExpect(status().isConflict());

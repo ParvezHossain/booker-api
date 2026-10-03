@@ -84,6 +84,49 @@ class BookReadingMigrationTest {
         });
     }
 
+    @Test void requestEmailUpgradePreservesQueuedDecisionsAndAllowsIndependentAdminReceipts() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "12");
+            var jdbc = schema.jdbc();
+            UUID workspace = UUID.fromString("00000000-0000-0000-0000-000000000001");
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,workspace_id) VALUES ('requester@example.com','test-only',?)", workspace);
+            UUID request = UUID.randomUUID();
+            jdbc.update("INSERT INTO public_library_book_requests(id,title,author_name,workspace_id,requester_email) VALUES (?,'Book','Author',?,'requester@example.com')", request, workspace);
+            jdbc.update("INSERT INTO public_request_emails(request_id,recipient,message) VALUES (?,'requester@example.com','Existing decision')", request);
+            var before = jdbc.queryForMap("SELECT * FROM public_request_emails WHERE request_id=?", request);
+            migrate(schema.name(), null);
+            var after = jdbc.queryForMap("SELECT * FROM public_request_emails WHERE request_id=?", request);
+            before.forEach((key,value) -> assertEquals(value, after.get(key)));
+            assertEquals("DECISION", after.get("email_type"));
+            assertEquals("Your Booker public library request", after.get("subject"));
+            assertNull(after.get("html_message"));
+            for (String recipient : java.util.List.of("admin@example.com", "second-admin@example.com"))
+                jdbc.update("INSERT INTO public_request_emails(request_id,email_type,recipient,message) VALUES (?,'SUBMISSION',?,'New request')", request, recipient);
+            assertEquals(3, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?", Integer.class, request));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO public_request_emails(request_id,email_type,recipient,message) VALUES (?,'SUBMISSION','admin@example.com','Duplicate')", request));
+            jdbc.update("DELETE FROM public_request_emails WHERE request_id=? AND email_type='SUBMISSION' AND recipient='admin@example.com'", request);
+            assertEquals(2, jdbc.queryForObject("SELECT count(*) FROM public_request_emails WHERE request_id=?", Integer.class, request));
+        });
+    }
+
+    @Test void rabbitOutboxUpgradePreservesPendingMessagesAndGivesEachReceiptAStableIdentity() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "13");
+            var jdbc=schema.jdbc();
+            UUID workspace=UUID.fromString("00000000-0000-0000-0000-000000000001"), request=UUID.randomUUID();
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,workspace_id) VALUES ('queue-reader@example.com','test-only',?)",workspace);
+            jdbc.update("INSERT INTO public_library_book_requests(id,title,author_name,workspace_id,requester_email) VALUES (?,'Queued book','Author',?,'queue-reader@example.com')",request,workspace);
+            jdbc.update("INSERT INTO public_request_emails(request_id,recipient,message,html_message,email_type) VALUES (?,'admin@example.com','Existing text','<p>Existing HTML</p>','SUBMISSION')",request);
+            var before=jdbc.queryForMap("SELECT * FROM public_request_emails WHERE request_id=?",request);
+            migrate(schema.name(),null);
+            var after=jdbc.queryForMap("SELECT * FROM public_request_emails WHERE request_id=?",request);
+            before.forEach((key,value) -> assertEquals(value,after.get(key)));
+            assertNotNull(after.get("id"));assertNotNull(after.get("available_at"));
+            assertNull(after.get("published_at"));assertNull(after.get("failed_at"));assertEquals(0,after.get("attempts"));
+            assertEquals(0,flyway(schema.name(),null).migrate().migrationsExecuted);
+        });
+    }
+
     private java.util.List<java.util.Map<String, Object>> withoutLegacyIdentifier(java.util.List<java.util.Map<String, Object>> books) {
         return books.stream().map(book -> {
             var copy = new java.util.HashMap<>(book);

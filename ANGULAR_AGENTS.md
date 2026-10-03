@@ -2,26 +2,29 @@
 
 ## Purpose and source of truth
 
-Build the Booker web client in `Booker_UI` using Angular 22 or newer and Node.js 24. These are instructions for future implementation; this file does not claim that any frontend feature exists.
+These rules apply to the separately maintained Booker Angular client. Angular 22+
+and compatible Node.js 24 are the specified target; verify the actual client stack
+and official compatibility matrix before a toolchain change. These are instructions for future implementation; this file does not claim that any frontend feature exists.
 
-Read this file and `ANGULAR_PROMPTS.md` before working. Read the relevant endpoint sections of `API.md` before each feature. The backend's lowercase `api.md` is only a link to `API.md`. Copy the actual `API.md` into the UI repository too, or configure an accessible reference path. Do not rely on a link to a backend folder that is unavailable.
+Read this file and `ANGULAR_PROMPTS.md` before working. Read the relevant endpoint sections of `API.md` before each feature. Copy `API.md` into the UI repository too, or configure an accessible reference path. Do not rely on a link to a backend folder that is unavailable.
 
-`API.md` is the HTTP contract. The older backend feature roadmap is not a substitute for implemented endpoints. If documentation and a live response disagree, report the concrete discrepancy; do not silently invent a contract or modify the backend.
+`API.md` is the HTTP contract. Proposed backlog items are not implemented endpoints. If documentation and a live response disagree, report the concrete discrepancy; do not silently invent a contract or modify the backend.
 
-Agents may not automatically discover `ANGULAR_AGENTS.md`. Configure the coding tool to read it, explicitly mention it in every prompt, or add a UI-root `AGENTS.md` that instructs the tool to read it. Do not overwrite existing `AGENTS.md` instructions.
+Keep these client rules accessible from the client repository contribution guide.
+Preserve its existing instructions and backend contract reference.
 
 ## Working process
 
 1. Inspect the UI repository, instructions, package versions, routes, components, services, styling, tests and configuration before editing.
-2. Execute only the requested prompt phase. Phase 1 is inspection and design only; wait for confirmation afterward. Once an implementation phase is requested, finish its authorized work without repeated confirmation requests.
+2. Keep changes within the agreed work item. Complete an architecture/access review before foundational changes; avoid unrelated rewrites.
 3. Before changing an existing class/service/component, explain the intended change and its purpose. Preserve unrelated work and existing conventions.
 4. Reuse an existing app. Scaffold only if the folder has no application. Do not rewrite the architecture, add a backend, or modify backend/database files.
-5. After each phase report changed files, behavior, checks actually run, and remaining limitations. Keep a phase checklist in `docs/angular-implementation-status.md`; never mark mocks as live integration.
-6. Add meaningful tests with the feature, run relevant checks, and stop at that phase's boundary. Later phases must inspect previous work rather than recreate it.
+5. Maintain the client implementation checklist with actual behavior, checks and limitations; mocked integration is not live provider verification.
+6. Add meaningful behavioral tests and run client verification. Build on existing implementation rather than recreating it.
 
 ## Toolchain and architecture
 
-- Use a stable Angular release >=22 compatible with Node 24; verify official compatibility and npm package engines before installation. Angular 22.0.x lists Node `^24.15.0`, so Node 24.0 alone is insufficient. Recheck for the exact release chosen: [official version matrix](https://angular.dev/reference/versions) and [next documentation matrix](https://next.angular.dev/reference/versions).
+- Use a stable Angular release >=22 compatible with Node 24; verify official compatibility and npm package engines before installation. A Node major version alone does not establish compatibility. Check the exact release against: [official version matrix](https://angular.dev/reference/versions) and [next documentation matrix](https://next.angular.dev/reference/versions).
 - Align Angular core, CLI, compiler and any Material/CDK versions. Use CLI-compatible TypeScript/RxJS versions; do not force peer dependencies. Pin a supported Node 24 patch in runtime configuration and CI; commit the package lock.
 - Prefer standalone components, lazy feature routes, strict TypeScript/templates, typed reactive forms, functional HTTP interceptors/guards, and Angular signals for local UI state. Use RxJS for HTTP and async orchestration. Follow the installed release's supported APIs and generated defaults, including its change-detection setup.
 - Keep HTTP access in typed services and reading synchronization in a separate coordinator. Share document/reader primitives while keeping private/public access and progress scopes explicit.

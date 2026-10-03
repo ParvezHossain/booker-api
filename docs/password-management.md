@@ -6,11 +6,11 @@ The backend supports workspace owners and Super Admin accounts using the existin
 
 All requests use JSON and all successful responses use `Cache-Control: no-store`.
 
-| Step | Method and path | Authentication | Body | Success |
-|---|---|---|---|---|
-| 36 | POST `/api/auth/change-password` | Bearer or Basic | `{"currentPassword":"old-password-123","newPassword":"new-password-123"}` | 204, empty |
-| 37 | POST `/api/auth/forgot-password` | None | `{"email":"owner@example.com"}` | 202, `{"message":"If the account exists, a password reset email will be sent."}` |
-| 38 | POST `/api/auth/reset-password` | None | `{"token":"emailed-token","newPassword":"new-password-123"}` | 204, empty |
+| Method and path | Authentication | Body | Success |
+|---|---|---|---|
+| POST `/api/auth/change-password` | Bearer or Basic | `{"currentPassword":"old-password-123","newPassword":"new-password-123"}` | 204, empty |
+| POST `/api/auth/forgot-password` | None | `{"email":"owner@example.com"}` | 202, `{"message":"If the account exists, a password reset email will be sent."}` |
+| POST `/api/auth/reset-password` | None | `{"token":"emailed-token","newPassword":"new-password-123"}` | 204, empty |
 
 New passwords must contain 12–64 characters and cannot be blank. Current password is required, at most 64 characters. Emails are normalized to lowercase and limited to 254 characters. Tokens are 43 URL-safe characters. Do not send an email, user ID, role or workspace ID to select the account for change/reset.
 
@@ -40,6 +40,11 @@ Apply request rate limits at the reverse proxy for login/change/forgot/reset, pa
 
 Android and Angular UI changes are not included. Swagger exposes all three operations. API inventory and Android reference include them for client implementation.
 
-## Verification
+## Test coverage
 
-All 99 backend tests passed with no failures, errors or skipped tests, including seven new password-management tests. Final password/authentication tests (11) and Maven package build also passed. Tests cover session revocation, owner and Super Admin password changes, wrong passwords, reset-token hashing/expiry/replay/replacement/concurrent consumption, cooldown, generic unknown-account responses, SMTP failure, and missing email configuration. Live SMTP delivery and frontend screens were not tested or implemented.
+`PasswordManagementTest` covers revocation, owner/admin password changes, incorrect
+passwords, reset hashing/expiry/replay/replacement, concurrent consumption, cooldown,
+generic unknown-account responses, SMTP failure and missing configuration.
+`SmtpPasswordResetDeliveryTest` covers mail formatting and URL/configuration rules.
+Run the suite using [the disposable database setup](operations.md#testing).
+Live SMTP delivery and client reset screens require separate verification.

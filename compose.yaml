@@ -15,18 +15,51 @@ services:
       timeout: 5s
       retries: 10
 
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    mem_limit: ${RABBITMQ_MEMORY_LIMIT:-512m}
+    cpus: ${RABBITMQ_CPU_LIMIT:-1.0}
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-booker}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+    ports:
+      - '127.0.0.1:5672:5672'
+      - '127.0.0.1:15672:15672'
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   lgtm:
     image: grafana/otel-lgtm:latest
     ports:
-      - '3000:3000' # Grafana Dashboard
-      - '4317:4317' # OTLP gRPC Receiver
-      - '4318:4318' # OTLP HTTP Receiver
+      - '127.0.0.1:3000:3000' # Grafana Dashboard (local development)
+      - '127.0.0.1:4317:4317' # OTLP gRPC Receiver
+      - '127.0.0.1:4318:4318' # OTLP HTTP Receiver
 
   app:
     build: .
     ports:
-      - '8080:8080'
+      - '${PORT:-8080}:8080'
     environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-booker}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      RABBITMQ_SSL_ENABLED: false
+      BOOK_REQUEST_EMAIL_ENABLED: ${BOOK_REQUEST_EMAIL_ENABLED:-true}
+      BOOK_REQUEST_EMAIL_QUEUE: ${BOOK_REQUEST_EMAIL_QUEUE:-booker.request-emails}
+      BOOK_REQUEST_EMAIL_POLL_MILLIS: ${BOOK_REQUEST_EMAIL_POLL_MILLIS:-1000}
+      BOOK_REQUEST_EMAIL_BATCH_SIZE: ${BOOK_REQUEST_EMAIL_BATCH_SIZE:-20}
+      BOOK_REQUEST_EMAIL_QUEUE_LIMIT: ${BOOK_REQUEST_EMAIL_QUEUE_LIMIT:-1000}
+      BOOK_REQUEST_EMAIL_MAX_ATTEMPTS: ${BOOK_REQUEST_EMAIL_MAX_ATTEMPTS:-5}
+      BOOK_REQUEST_EMAIL_RETRY_SECONDS: ${BOOK_REQUEST_EMAIL_RETRY_SECONDS:-30}
+      BOOK_REQUEST_EMAIL_REDISPATCH_SECONDS: ${BOOK_REQUEST_EMAIL_REDISPATCH_SECONDS:-300}
       DATABASE_URL: jdbc:postgresql://postgres:5432/android
       DATABASE_USERNAME: admin
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:?Set DATABASE_PASSWORD in .env}
@@ -57,10 +90,14 @@ services:
       BOOK_MAX_REQUEST_SIZE: ${BOOK_MAX_REQUEST_SIZE:-201MB}
       BOOK_WORKSPACE_STORAGE_LIMIT: ${BOOK_WORKSPACE_STORAGE_LIMIT:-5GB}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
+      SSE_MAX_CONNECTIONS: ${SSE_MAX_CONNECTIONS:-200}
+      SSE_POLL_MILLIS: ${SSE_POLL_MILLIS:-1000}
       MANAGEMENT_OTLP_METRICS_EXPORT_URL:
     volumes:
       - book-files:/app/data
     depends_on:
+      rabbitmq:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       lgtm:
@@ -68,3 +105,4 @@ services:
 volumes:
   postgres-data:
   book-files:
+  rabbitmq-data:

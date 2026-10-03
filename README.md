@@ -1,315 +1,516 @@
 # Booker SaaS API
 
-A hosted, multi-tenant book catalogue built with Java 25, Spring Boot 4.1.1,
-PostgreSQL and Flyway. Each signup creates an independent workspace and owner
-account. Customers can create and search their books and receive live notifications.
+Booker is a multi-tenant book catalogue and PDF reading backend. Each signup
+creates an empty workspace and owner account. Private libraries are workspace
+scoped; a global library is available to authenticated accounts and managed by
+Super Admin.
 
-This repository provides the API, not an Android client or web dashboard.
-It includes a free plan with 100 books per workspace and operator-managed plan
-limits. Payment checkout, recurring billing, email verification, password recovery,
-team invitations and self-service upgrades are not implemented.
+This repository contains the Spring Boot API. Android and Angular client
+requirements are documented here, but client application sources are maintained
+separately.
 
-## Start with Docker
+## Contents
 
-Install Docker with Compose, then run:
+- [Capabilities](#capabilities)
+- [Architecture and stack](#architecture-and-stack)
+- [Local development](#local-development)
+- [Environment configuration](#environment-configuration)
+- [API and first requests](#api-and-first-requests)
+- [Documents and reading progress](#documents-and-reading-progress)
+- [External integrations and administration](#external-integrations-and-administration)
+- [Database and upgrades](#database-and-upgrades)
+- [Security](#security)
+- [Testing and CI](#testing-and-ci)
+- [Deployment and operations](#deployment-and-operations)
+- [Troubleshooting](#troubleshooting)
+- [Documentation and contributing](#documentation-and-contributing)
+
+## Capabilities
+
+- Workspace signup, JWT login/rotating refresh/logout, legacy Basic authentication,
+  password changes and emailed password recovery.
+- Private book creation, numeric-ID lookup and exact author/title filtering, with
+  configurable workspace quotas and operator-managed FREE/PRO entitlements.
+- PDF upload, immutable replacement, authenticated streaming/Range/HEAD and saved
+  reading position. Private progress is per account; public progress is per workspace.
+- Browser-bound Google Drive OAuth/Picker and queued PDF import into local storage.
+- Super Admin public catalogue management and workspace book requests with review,
+  durable SSE notifications and RabbitMQ-queued administrator/requester emails,
+  delivered sequentially with bounded retries.
+
+Billing, team invitations, email verification, private metadata editing/deletion,
+server pagination, object storage and mobile push are not implemented. Proposed
+work is tracked in [PROMPTS.md](PROMPTS.md).
+
+## Architecture and stack
+
+Java 25, Spring Boot 4.1.1, Spring MVC/Security, PostgreSQL, RabbitMQ, Flyway, JPA/JDBC,
+PDFBox 3.0.8 and springdoc 3.1.0. Compose uses PostgreSQL 18. Services own business
+rules and transactions; controllers handle HTTP. JPA manages book metadata; JDBC
+handles accounts, document metadata, progress, queues and events. PDFs are stored
+outside PostgreSQL through `FileStorageService`; LOCAL is the current provider.
+
+```mermaid
+flowchart LR
+    Clients[Android, browser and API clients] --> Security[Spring Security]
+    Security --> Controllers[HTTP controllers and validation]
+    Controllers --> Services[Authorization and business services]
+    Services --> Database[(PostgreSQL)]
+    Services --> Storage[FileStorageService / LOCAL PDFs]
+    Services --> Google[Google OAuth and Drive]
+    Workers[Scheduled import, mail and cleanup workers] --> Database
+    Workers --> Storage
+    Workers --> Rabbit[RabbitMQ email queue]
+    Rabbit --> Consumer[Single active email consumer]
+    Consumer --> SMTP[SMTP]
+    Database --> SSE[Workspace SSE notifications]
+    SSE --> Clients
+```
+
+| Component | Implementation |
+| --- | --- |
+| Runtime and build | Java 25; Maven wrapper; Spring Boot 4.1.1 |
+| HTTP and security | Spring MVC, Jakarta Validation, Spring Security, JWT and legacy Basic |
+| Messaging | RabbitMQ 4.2; durable quorum email queue, single active consumer and prefetch 1 |
+| Persistence | PostgreSQL; Spring Data JPA for books; JDBC for other feature state |
+| Schema evolution | Flyway; Hibernate schema validation; open-in-view disabled |
+| PDF processing | Apache PDFBox 3.0.8; file storage outside the database |
+| API documentation | springdoc 3.1.0; Swagger UI and generated OpenAPI |
+| Operations | Actuator health; OpenTelemetry dependencies; local Grafana/OTel Compose service |
+| Verification | JUnit/Spring tests, GitHub Actions and configured Qodana analysis |
+
+No application cache is implemented. RabbitMQ carries opaque IDs for request/decision
+email receipts, while PostgreSQL retains email bodies, retry state and durable work.
+Import jobs, notification events, progress retries and file cleanup remain in PostgreSQL. JobRunr is a dependency; application jobs
+and an exposed JobRunr dashboard are not established by that dependency.
+
+```text
+src/main/java/com/parvez/android/   Controllers, services and feature packages
+src/main/resources/                Environment-backed properties and Flyway V1–V14
+src/test/java/                     Unit, MVC, database and real HTTP tests
+.mvn/wrapper/                      Maven wrapper distribution configuration
+.github/workflows/                 Build, test and Docker validation
+docs/                             Feature design and operations guides
+compose.yaml                      Local database, RabbitMQ, backend and Grafana/OTel services
+Dockerfile                        Multi-stage Java build; non-root runtime
+.env.example                      Safe environment configuration template
+API.md                            Endpoint contracts, DTOs and request examples
+PROMPTS.md                        Proposed engineering work and acceptance criteria
+qodana.yaml                       JVM static-analysis configuration
+```
+
+See [architecture and invariants](docs/code-quality-review.md) and the
+[contributor guide](AGENTS.md).
+
+## Local development
+
+Choose Docker for the complete local stack, or run the backend from source.
+
+| Mode | Prerequisites |
+| --- | --- |
+| Docker | Docker Engine/Desktop with Compose v2; available ports 8080, 5432, 5672, 15672, 3000, 4317 and 4318 |
+| Source | JDK 25, PostgreSQL (18 matches Compose/CI), RabbitMQ (4.2 matches Compose/CI), shell access and the Maven wrapper |
+| Verification | Disposable PostgreSQL and RabbitMQ, JDK 25 and Docker for container validation |
+
+The wrapper downloads Maven; initial builds need dependency download access.
+OpenSSL is used in the examples to generate signing and encryption keys.
+
+### Docker
 
 ```sh
 cp .env.example .env
-# Edit .env: set DATABASE_PASSWORD and set JWT_SECRET using openssl rand -base64 32.
+# Set strong DATABASE_PASSWORD and RABBITMQ_PASSWORD values.
+# Set JWT_SECRET using openssl rand -base64 32.
+docker compose config --quiet
 docker compose up --build -d
 curl http://localhost:8080/actuator/health
 ```
 
-The API is at `http://localhost:8080`. Interactive API documentation is at
-`http://localhost:8080/swagger-ui/index.html`. PostgreSQL data persists in a named
-volume. `docker compose down` stops the service while keeping data;
-`docker compose down -v` deletes the database.
-
-## Swagger / OpenAPI
-
-Open `/swagger-ui/index.html` for interactive documentation, or download
-`/v3/api-docs` for the OpenAPI JSON specification. Both are publicly accessible.
-
-1. Expand **Workspaces → POST /api/auth/signup**, select **Try it out**, and create an account.
-2. Call **Authentication → POST /api/auth/login**, then paste the returned `accessToken` into **Authorize → bearerAuth**.
-3. Execute **GET /api/workspace** to see your plan and usage, then try the **Book Management** endpoints.
-
-Schemas include signup validation, workspace response fields, book payloads and
-application errors. Endpoint documentation describes tenant isolation, quotas,
-and notification replay. Use the `curl -N` example below for SSE; Swagger UI is
-not a live event viewer.
-
-## Create your workspace
+Useful local commands:
 
 ```sh
-curl -i http://localhost:8080/api/auth/signup \
-  -H 'Content-Type: application/json' \
-  -d '{"workspaceName":"My Library","email":"owner@example.com","password":"replace-this-password"}'
+docker compose ps
+docker compose logs -f app
+docker compose stop
+docker compose down
 ```
 
-A successful request returns HTTP 201 and the workspace ID, name, email and FREE
-plan. Passwords must contain 12–64 characters and are stored as salted PBKDF2
-hashes. Email addresses are normalized to lowercase and must be unique. Duplicate
-signup returns 409 and does not leave an empty workspace behind.
+The default API port is 8080. Compose starts PostgreSQL, RabbitMQ, the backend and a local
+Grafana/OTel development stack. Database, broker and PDF data persist in separate
+named volumes. `docker compose down` preserves them; `docker compose down -v` deletes
+all three data volumes. Compose is a development baseline; use the production controls described
+in [operations](docs/operations.md).
 
-Log in to obtain a JWT access token (15 minutes) and refresh token (7 days):
-
-```sh
-curl http://localhost:8080/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"owner@example.com","password":"replace-this-password"}'
-
-# Set ACCESS_TOKEN and REFRESH_TOKEN to the returned values.
-curl http://localhost:8080/api/workspace -H "Authorization: Bearer $ACCESS_TOKEN"
-curl http://localhost:8080/api/auth/refresh \
-  -H 'Content-Type: application/json' \
-  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}"
-# Replace REFRESH_TOKEN with the new value from refresh before logging out.
-curl -i http://localhost:8080/api/auth/logout \
-  -H 'Content-Type: application/json' \
-  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}"
-```
-
-Login and refresh return `accessToken`, `refreshToken`, `tokenType`, `expiresIn`
-and `refreshExpiresIn` (lifetimes in seconds). Save both replacement tokens after
-refresh: the old refresh token immediately becomes invalid. Refresh and logout
-accept the refresh token in the JSON body, without an Authorization header.
-Logout revokes that refresh token; existing access tokens remain valid until expiry.
-Each login creates an independent session. Refresh tokens are stored only as SHA-256
-hashes in PostgreSQL and survive application restarts. Use the same signing secret
-across replicas; changing it invalidates all existing tokens. Expired database rows
-can be periodically removed with `DELETE FROM refresh_tokens WHERE expires_at <= now()`.
-Store tokens securely and use HTTPS for any non-local deployment.
-HTTP Basic remains supported for existing clients.
-The old shared `admin/admin` API account is no longer available.
-
-## Global Public Library
-
-Authenticated workspaces can read global books without duplicating them into their
-private libraries. Super Admin creates/updates/deletes them at `/api/public-books`
-and uploads PDFs. Public progress is shared by each workspace; private reading
-progress stays account-specific. All public routes require authentication.
-
-For initial setup, set `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD` (12–64
-characters) using a dedicated email, then launch normally. Existing credentials
-are not reset on restart; no signup request can choose this role. Existing
-installations can omit these variables until provisioning. Remove bootstrap
-secrets after setup. Log in through the same `/api/auth/login` endpoint.
-
-Public upload streams a raw application/pdf body and bypasses normal private book,
-file, page and storage quotas; private multipart limits are unchanged. Flyway V10
-extends existing book/document infrastructure and adds workspace progress and
-reliable file cleanup after public deletion. No frontend code is changed.
-
-Public Library validation: all 92 backend tests passed with none skipped, including
-a real HTTP public/private upload-limit check; the backend package build passed.
-
-See [Public Library APIs, setup, schema and examples](docs/public-library.md) and
-[complete 38-operation API inventory](api.md).
-
-## Upload and read PDFs
-
-Books can now have a private PDF document, uploaded from any authenticated client
-or imported from a connected Google Drive account. Reading progress is per account;
-existing book metadata and `completed` behavior remain unchanged.
-
-The Angular client in `../booker-ui` includes upload/retry controls, a PDF reader,
-resume position, progress summaries and Google Picker integration. The Android
-client source has not been identified, so native client changes are still pending.
-
-See [PDF reading APIs, schema, synchronization, storage and Google setup](docs/book-reading.md).
-Compose persists PDFs in a separate `book-files` volume. Google Drive is disabled
-until its OAuth settings and encryption key are supplied. Back up both the database
-and the file volume. `docker compose down -v` removes both.
-
-## Use the API
-
-The following examples use the access token returned by login:
+### Run from source
 
 ```sh
-# View your workspace, plan, book_limit and books_used.
-curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/workspace
-
-# Create a book.
-curl -i -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018","description":"Java best practices","completed":false}'
-
-# List books.
-curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books
-
-# Search by exact author, title, or both.
-curl -H "Authorization: Bearer $ACCESS_TOKEN" --get http://localhost:8080/api/books \
-  --data-urlencode 'author=Joshua Bloch' --data-urlencode 'title=Effective Java'
-
-# Retrieve one book.
-curl -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books/1
-
-# Stream your workspace's events; replay from the beginning.
-curl -N -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/books/events \
-  -H 'Accept: text/event-stream' -H 'Last-Event-ID: 0'
-```
-
-Title and author are required (maximum 255
-characters); publication date is a required string (maximum 20 characters),
-and description is optional (maximum 5,000 characters). Creation returns 201
-with a usable `Location` header. The exact, case-sensitive author/title pair is unique within a workspace; separate
-workspaces may store the same pair. New workspaces start empty.
-
-| Status | Meaning |
-| --- | --- |
-| 400 | Invalid JSON, fields, or event cursor |
-| 401 | Missing or incorrect credentials |
-| 403 | Workspace book limit reached, or endpoint access denied |
-| 404 | Book ID does not exist in your workspace |
-| 409 | Duplicate email or workspace author/title pair |
-| 503 | Notification connection capacity reached |
-
-Workspace identity comes from the authenticated account, never a client-supplied
-workspace header. Search, numeric book-ID lookup and event replay are scoped to that identity.
-Book limits are checked under a database row lock to serialize concurrent creates
-for a workspace. Book insert and notification creation commit together.
-
-For SSE, store the last event ID and send it as `Last-Event-ID` on reconnection.
-Omit that header for future events only. IDs are global opaque strings and may
-have gaps because other workspaces' events are filtered out. Connections close
-after five minutes; reconnect with backoff. See [notification details](docs/book-notifications.md).
-
-## Run from source and test
-
-Install JDK 25 and Maven, or use the included `./mvnw` wrapper.
-
-```sh
-cp .env.example .env
-# Edit the password, then start only the database.
-docker compose up -d postgres
-export DATABASE_URL=jdbc:postgresql://localhost:5432/android
-export JWT_SECRET='your-base64-encoded-random-key'
-export DATABASE_USERNAME=admin
-export DATABASE_PASSWORD='the-password-you-set-in-.env'
+docker compose up -d postgres rabbitmq
+export DATABASE_URL='jdbc:postgresql://localhost:5432/android'
+export DATABASE_USERNAME='admin'
+# Export DATABASE_PASSWORD and RABBITMQ_PASSWORD with the values in .env.
+export RABBITMQ_HOST=localhost
+export RABBITMQ_USERNAME=booker
+export JWT_SECRET="$(openssl rand -base64 32)"
 ./mvnw spring-boot:run
 ```
 
-Compose reads `.env`; Maven and Java do not, so export configuration explicitly.
-Flyway applies migrations on startup, and Hibernate validates the resulting schema.
+Compose reads `.env`; Java/Maven do not. Export `DATABASE_PASSWORD` explicitly;
+there is no default database password. Keep the JWT key stable when retaining
+sessions. Flyway applies pending migrations and Hibernate validates the schema
+on startup. Configuration, Google/SMTP setup and upgrade procedures are maintained
+in [docs/operations.md](docs/operations.md).
 
-Use a **dedicated test database** because integration tests create workspaces and
-books. The optional event persistence test creates and removes its own schema.
+To package and run the executable JAR, use the same exported configuration:
 
 ```sh
-DATABASE_URL=jdbc:postgresql://localhost:5432/booker_test \
-JWT_SECRET="$JWT_SECRET" DATABASE_USERNAME=admin DATABASE_PASSWORD='test-database-password' \
-BOOK_EVENTS_TEST_JDBC_URL='jdbc:postgresql://localhost:5432/booker_test?user=admin&password=test-database-password' \
-./mvnw test
-
-./mvnw -DskipTests package
+./mvnw -B -DskipTests package
 java -jar target/android-0.0.1-SNAPSHOT.jar
 ```
 
-Without `BOOK_EVENTS_TEST_JDBC_URL`, the low-level event persistence test is skipped.
-The application-context and workspace integration tests still require PostgreSQL.
+This packaging command skips tests; run the verification lifecycle below before
+releasing a build. Stop the Compose `app` service before running a source instance
+on the same port. Grafana is available at `http://localhost:3000` when the full
+Compose stack is running.
 
-## Configuration and hosting
+## Environment configuration
 
-| Variable | Default / purpose |
+Start with [.env.example](.env.example). Required secrets have no usable example
+value. Generate keys locally, keep them out of version control, and supply them
+through exported variables or your deployment secret manager.
+
+| Setting | Default / purpose |
 | --- | --- |
-| `PORT` | `8080` |
-| `DATABASE_URL` | `jdbc:postgresql://localhost:5432/android` |
-| `DATABASE_USERNAME` | `admin` (local development) |
-| `DATABASE_PASSWORD` | `admin` in source mode; required by Compose |
-| `JWT_SECRET` | Required base64-encoded random key, at least 32 bytes (`openssl rand -base64 32`) |
-| `JWT_ACCESS_TTL` | `PT15M`; ISO-8601 duration |
-| `JWT_REFRESH_TTL` | `P7D`; must exceed access lifetime |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:4200`; comma-separated frontend origins |
-| `SSE_MAX_CONNECTIONS` | `200` per application instance |
-| `SSE_POLL_MILLIS` | `1000` |
+| `DATABASE_URL` | `jdbc:postgresql://localhost:5432/android`; Compose overrides the host to `postgres` |
+| `DATABASE_USERNAME` | `admin` for the local baseline |
+| `DATABASE_PASSWORD` | Required; replace the example placeholder |
+| `JWT_SECRET` | Required Base64 key of at least 32 random bytes; generate with `openssl rand -base64 32` |
+| `PORT` | 8080; source server port or Compose host port |
+| `JWT_ACCESS_TTL`, `JWT_REFRESH_TTL` | `PT15M`, `P7D`; ISO-8601 durations |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:4200`; comma-separated exact origins |
+| `BOOK_STORAGE_DIRECTORY` | `./data/books`; Compose uses `/app/data/books` |
+| `BOOK_MAX_FILE_SIZE`, `BOOK_MAX_REQUEST_SIZE` | `200MB`, `201MB`; file and multipart request limits |
+| `BOOK_WORKSPACE_STORAGE_LIMIT` | `5GB`; retained private document versions count toward usage |
+| `BOOK_MAX_PAGES` | 20000 for private PDFs |
+| `SSE_MAX_CONNECTIONS`, `SSE_POLL_MILLIS` | 200 connections per instance; 1000 ms polling |
+| `GOOGLE_DRIVE_ENABLED` | false; optional integration |
+| `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` | Optional initial provisioning pair |
+| `SMTP_HOST`, `PASSWORD_RESET_FROM`, `PASSWORD_RESET_URL` | Optional email transport, sender and HTTPS reset landing page |
+| `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source defaults to `http://localhost:4318/v1/metrics`; Compose sets an empty value |
 
-Deploy the container behind an HTTPS reverse proxy, use a persistent PostgreSQL
-database and inject credentials through your hosting platform's secret store.
-Configure your actual frontend origin and disable reverse-proxy buffering for SSE.
-Allow connections longer than five minutes. Health checks use `/actuator/health`.
-Database backups and restore testing are the operator's responsibility.
+Drive credentials, Picker configuration, remaining SMTP options and worker settings
+are documented in the [complete configuration reference](docs/operations.md#configuration).
+RabbitMQ host/credentials and bounded delivery settings are listed in the
+[request email queue guide](docs/request-email-queue.md#configuration). Broker delivery
+is enabled by default; `BOOK_REQUEST_EMAIL_ENABLED=false` pauses emails and keeps
+receipts pending, without a direct SMTP fallback.
 
-Before public launch, configure gateway limits for signup, authentication and
-requests. Signup currently has no email verification or abuse protection. Book
-lists are unpaginated and the event log has no automatic retention policy.
-Multiple app instances share database state, but SSE connection limits are per
-instance. Plan limits are entitlements only; no customer is charged by this app.
+Keep the JWT key stable across restarts to retain valid sessions. Keep the separate
+Drive encryption key stable to retain access to stored connections. `.env` is
+consumed by Compose, not automatically by Maven or the packaged application.
 
-An operator can provision a PRO entitlement directly in PostgreSQL after arranging
-payment externally. Use the workspace ID returned at signup:
+## API and first requests
 
-```sql
-UPDATE workspaces SET plan = 'PRO', book_limit = 10000
-WHERE id = 'replace-with-workspace-uuid';
+- Interactive documentation: `http://localhost:8080/swagger-ui/index.html`.
+- OpenAPI JSON: `http://localhost:8080/v3/api-docs`.
+- Complete contracts and examples: [API.md](API.md), covering 43 business operations,
+  public health and the denied legacy root mapping.
+
+Create an account with `POST /api/auth/signup`, then log in with
+`POST /api/auth/login`. Use the returned access token in
+`Authorization: Bearer <accessToken>`. Refresh rotates both tokens; password
+change/reset invalidates previous account tokens. Signup does not issue tokens.
+The FREE workspace book limit defaults to 100; PRO entitlements are administered
+outside the customer API.
+
+A minimal account and book workflow:
+
+```sh
+export API_BASE='http://localhost:8080'
+
+curl -i -X POST "$API_BASE/api/auth/signup" \
+  -H 'Content-Type: application/json' \
+  -d '{"workspaceName":"My Library","email":"owner@example.com","password":"replace-this-password"}'
+
+curl -sS -X POST "$API_BASE/api/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"owner@example.com","password":"replace-this-password"}'
+
+# Set ACCESS_TOKEN to the accessToken returned by login.
+export ACCESS_TOKEN='replace-with-returned-access-token'
+
+curl -i -X POST "$API_BASE/api/books" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Effective Java","author":"Joshua Bloch","publishedDate":"2018","description":"Java programming practices","completed":false}'
+
+curl -sS "$API_BASE/api/books" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
-There is deliberately no customer endpoint for granting paid entitlements.
+Replace the example password before use. Signup requires a workspace name, a
+valid email and a 12–64 character password. Login returns the token pair.
+Books use numeric IDs; title and author are required, `publishedDate` is a
+required string, and the exact author/title pair is unique within its scope.
+List filters are exact matches and results are currently unpaginated.
 
-## Author/title book identity upgrade
+| API area | Main routes | Access |
+| --- | --- | --- |
+| Identity and sessions | `/api/auth/*` | Public signup/login/recovery; protected password change |
+| Workspace | `/api/workspace` | Workspace account |
+| Private library | `/api/books`, `/api/books/{bookId}` | Authenticated workspace only |
+| PDF and progress | `/api/books/{bookId}/document`, `/document/content`, `/reading-progress` | Authorized workspace; progress per account |
+| Drive | `/api/integrations/google-drive/*`, book document import routes | Authenticated connection and authorized import; callback uses OAuth state |
+| Notifications | `/api/books/events` | Workspace-scoped SSE |
+| Public library | `/api/public-books/*` | Authenticated reads; Super Admin mutations |
+| Public requests | `/api/public-book-requests`, `/api/admin/public-book-requests/*` | Workspace submissions/history; Super Admin review |
+| Health | `/actuator/health` | Public aggregate health |
 
-Books are identified by numeric `id`. Create requests and responses contain
-`title`, `author`, `publishedDate`, `description`, and `completed`; detail lookup
-is `GET /api/books/{bookId}`. Creation's Location points to that lookup.
-The exact, case-sensitive `(workspace_id, author, title)` combination is unique.
-The same author may have multiple titles and different authors may share a title.
+This table is an orientation guide. [API.md](API.md) owns exact methods, headers,
+validation, status codes, request/response bodies and error contracts. Responses
+are direct DTOs; application errors generally use `ApiError`. Security-filter,
+HEAD/Range and progress-conflict responses have their own documented contracts.
 
-This changes the previous book API contract. Update clients together with the
-backend; Swagger metadata is version 2.0.0 and book-created payloads use
-schemaVersion 2. Retained notification snapshots use the same field set as new
-ones, while event IDs/order/cursors stay stable. See [all API contracts](api.md)
-and [Android implementation prompts](ANDROID_PROMPTS.md).
+## Documents and reading progress
 
-Flyway V9 preserves numeric book IDs, document/progress references and existing
-metadata, removes the previous identifier column, and adds the new unique
-constraint. V1–V8 remain unchanged to preserve installed migration checksums.
-Back up the database before upgrade. Check existing duplicate pairs first:
+Upload a PDF to an existing private book using its returned numeric ID:
 
-```sql
-SELECT workspace_id, author, title, count(*) AS duplicates, array_agg(id ORDER BY id) AS book_ids
-FROM books GROUP BY workspace_id, author, title HAVING count(*) > 1;
+```sh
+export BOOK_ID='replace-with-created-book-id'
+curl -i -X POST "$API_BASE/api/books/$BOOK_ID/document" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F 'file=@/path/to/book.pdf;type=application/pdf'
+
+curl -sS "$API_BASE/api/books/$BOOK_ID/reading-progress" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
-If duplicates exist, V9 stops transactionally with a clear message. Resolve them
-explicitly (for example, distinguish edition titles) before rerunning; it never
-silently merges/deletes books or their PDFs/progress. Back up/export the retired
-identifier data if it is needed for audit. There is no down migration; restoring
-removed values requires the pre-upgrade backup. Updating retained event payloads
-can be substantial on a large log; schedule an appropriate maintenance window.
+The upload response contains metadata, not PDF bytes. Document metadata uses UUIDs;
+bytes live behind generated storage keys. Each book has one active immutable
+version. Replacement retains the old version and resets visible progress for the
+new document; all retained private versions count toward storage usage.
 
-Identity-update validation: all 74 backend tests passed against an isolated
-PostgreSQL 18 database with none skipped; all 13 Angular tests and the production
-build passed (existing CSS budget warning).
+Readers use the authorized `/document/content` route with streaming, HTTP Range
+and HEAD support. The backend validates PDF extension, MIME/signature, parsed
+content, page count and unsupported unsafe features. LOCAL is the only storage
+provider implemented; the abstraction permits a future object-store provider.
 
-## Upgrade an existing installation
+Private progress belongs to an account/book pair. Public progress is shared by a
+workspace/book pair. `currentPage` is the resume position; `pagesRead` is the maximum
+page reached. Percentage derives from that maximum, with backend rounding. Before
+reading, position is 0 and `resumePage` is 1. Saved pages are one-based and cannot
+exceed the active document page count. Reading completion remains independent of
+the manually supplied `Book.completed` value.
 
-Back up the existing database first. Flyway V4 preserves all existing books and
-events under legacy workspace `00000000-0000-0000-0000-000000000001` without creating
-an account for it. New customers cannot access that catalogue. To recover access,
-register an owner account, then have the database operator assign that account:
+Progress saves use document identity, server revisions and operation UUIDs.
+Clients must retain the exact request for retries and handle revision conflicts;
+a simple page-only write is insufficient. See the
+[document and synchronization guide](docs/book-reading.md) for the implemented
+merge rules and client obligations. Client offline caching and reader behavior
+are specifications here, not client implementations in this repository.
 
-```sql
-UPDATE workspace_users
-SET workspace_id = '00000000-0000-0000-0000-000000000001'
-WHERE email = 'your-registered-owner@example.com';
+## External integrations and administration
+
+### Google Drive
+
+Drive is disabled by default. Enable Drive and Picker APIs in one Google Cloud
+project, configure OAuth consent, and create a Web application OAuth client.
+Provide `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, an exact registered
+`GOOGLE_DRIVE_REDIRECT_URI`, a separate Base64 32-byte
+`GOOGLE_DRIVE_ENCRYPTION_KEY`, a restricted `GOOGLE_DRIVE_PICKER_API_KEY` and the
+numeric `GOOGLE_DRIVE_PROJECT_NUMBER` before enabling the integration.
+
+The example callback on port 4200 requires a frontend proxy forwarding `/api` to
+the backend. Connection and callback must retain the same browser origin for the
+binding cookie. The backend callback returns HTML; it is not an SPA route.
+
+OAuth uses browser binding, expiring single-use state and PKCE. Selected-file
+imports are queued and copied into application storage, so completed imports do
+not depend on continued Drive availability. Clients poll import status and use
+the documented idempotency key. OAuth secrets remain on the backend; the Picker
+browser key is public and must have API/origin restrictions. Follow
+[Drive setup and deployment details](docs/operations.md#google-drive).
+
+### Email and password recovery
+
+Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, authentication
+and STARTTLS options, plus `PASSWORD_RESET_FROM`. Password recovery additionally
+requires `PASSWORD_RESET_URL`, an HTTPS client landing page; reset tokens expire
+after `PASSWORD_RESET_TTL` (default 30 minutes). Missing reset configuration
+returns 503. Request decisions commit independently of successful email delivery
+and use a durable PostgreSQL outbox plus RabbitMQ. New workspace book requests also enqueue
+an email to every provisioned Super Admin, using a professional HTML template
+and plain-text alternative with book, workspace and requester details. Submission
+success confirms persistence, not SMTP delivery. The same SMTP settings and sender
+are reused. RabbitMQ publishes bounded batches and sends through one active
+consumer with prefetch 1, including across replicas. SMTP retries are delayed and
+stop after five failures by default; a full/unavailable broker retains pending
+receipts in PostgreSQL. See [queue operations and recovery](docs/request-email-queue.md).
+
+### Super Admin and entitlements
+
+Provision the initial administrator with both `SUPER_ADMIN_EMAIL` and
+`SUPER_ADMIN_PASSWORD`, using a dedicated email and a 12–64 character password.
+Remove bootstrap secrets afterward. Request notifications use persisted Super Admin
+accounts rather than these bootstrap settings; provision an admin before accepting
+workspace requests. Startup does not reset an existing admin
+password or promote a workspace owner. Super Admin manages public books and
+reviews workspace book requests, but cannot access customer private libraries.
+
+FREE/PRO are operator-managed entitlements. FREE defaults to 100 private books;
+there is no billing, checkout or customer plan-change API. Operator procedures
+are in [operations](docs/operations.md).
+
+## Database and upgrades
+
+Flyway owns the V1–V14 migration sequence; Hibernate validates the resulting schema.
+Tables cover workspaces/accounts, private/public books, immutable documents,
+scoped progress and retry receipts, refresh/reset secrets, Drive connections/jobs,
+notifications, library requests, email receipts and file cleanup receipts.
+
+Fresh historical seed books belong to a reserved legacy workspace and have no
+automatically provisioned owner. New signups create an empty workspace and do not
+inherit those records. Legacy tenancy assignment is an explicit operator action.
+
+Before an upgrade, back up PostgreSQL and retained PDF files together. V9 requires
+unique exact workspace author/title pairs and removes historical ISBN data;
+perform the documented preflight before upgrading an existing installation.
+Applied migrations are immutable and there are no undo migrations. Use a new
+forward migration or restore coordinated backups. Changing the Compose PostgreSQL
+image is not a database major-version migration procedure. See
+[migration and upgrade guidance](docs/operations.md#database-migrations-and-upgrades).
+
+## Security
+
+Spring Security enforces authentication and role boundaries; services derive
+workspace/account scope from the authenticated principal. Passwords use salted
+PBKDF2, refresh/reset secrets are stored as hashes, and Drive credentials use
+account-bound AES-GCM. PDF endpoints never expose filesystem paths or public URLs.
+Use HTTPS, protected storage, backend-only secrets and gateway abuse controls in
+production. PDF validation is not antivirus scanning or a process sandbox.
+
+## Testing and CI
+
+Integration tests require a **disposable PostgreSQL database** and RabbitMQ for
+the broker integration suite. Export test database
+credentials, an ephemeral JWT key and `BOOK_EVENTS_TEST_JDBC_URL`. Set test broker
+credentials and `BOOK_REQUEST_EMAIL_ENABLED=false` for general test contexts; the
+RabbitMQ integration suite enables its own isolated queues. Then run:
+
+```sh
+./mvnw -B clean verify
 ```
 
-That owner will access the legacy workspace on their next authenticated request.
-The empty workspace originally created for that owner remains in the database.
-For an existing PostgreSQL deployment, retain its current database/volume and point
-`DATABASE_URL` at it; the supplied Compose configuration creates a new PostgreSQL
-18 volume and does not upgrade an old database volume automatically.
+The test database must be separate from data you need to retain: migration tests
+create/drop schemas, and integration tests create records and files. A focused
+set of database-free checks is available:
 
-## Password change and recovery
+```sh
+./mvnw -B -Dtest=GlobalExceptionHandlerTest,ReadingCompletionTest,LocalFileStorageServiceTest test
+```
 
-Three password endpoints are documented in [docs/password-management.md](docs/password-management.md). V11 adds expiring, hashed, single-use reset tokens and credential versions. Password changes revoke existing access/refresh tokens. Configure SMTP and `PASSWORD_RESET_FROM` / `PASSWORD_RESET_URL` for reset emails; Android/Angular reset screens are not part of this backend change.
+See [test setup](docs/operations.md#testing) for reproducible configuration.
+Without the event JDBC variable, its low-level concurrency test is skipped.
+The GitHub Actions workflow runs the full Maven lifecycle against PostgreSQL 18 and RabbitMQ 4.2,
+checks that no tests were skipped, and validates the Docker build. It does not
+publish images or deploy production. Reports are in `target/surefire-reports/`.
 
-## Backend maintenance
+The separate [Qodana workflow](.github/workflows/qodana_code_quality.yml) runs on
+pull requests, pushes to `main` and manual dispatch. [qodana.yaml](qodana.yaml)
+configures the JVM Community 2026.2 linter, Java 25 and the `qodana.starter` profile.
+The workflow references the `QODANA_TOKEN` repository secret, enables PR comments
+and annotations, and does not push fixes. Explicit severity/coverage failure
+thresholds are not configured. Its execution is separate from Maven verification.
 
-[The design and Swagger review](docs/code-quality-review.md) records the SOLID/KISS/DRY refactors, shared helpers, important invariants and automated API documentation checks.
+Tests cover tenant/role isolation, session revocation, PDF validation and streaming,
+progress concurrency/retries, migration upgrades, request rollback, mail receipts,
+real-broker backpressure, single-consumer delivery and delayed retries
+and simulated Drive calls. Passing backend tests does not verify live Google/SMTP,
+Android/Angular behavior, production capacity or backup restoration.
 
-Registered workspaces can request Global Public Library books; Super Admin can
-accept requests with a validated PDF or reject them. See
-[book request APIs and deployment notes](docs/public-library-requests.md).
-Decision notifications use the existing workspace SSE stream, and emails use
-the configured SMTP sender with a persistent retry outbox.
+## Deployment and operations
+
+The Dockerfile uses BuildKit dependency caching and Spring Boot layers to reuse
+dependencies when application code changes. It builds only main sources and runs
+the extracted application on a Java 25 JRE as UID 10001. Maven and build caches
+remain in the build stage. Docker Engine/Desktop with BuildKit is required.
+Layer extraction follows the [Spring Boot container packaging guide](https://docs.spring.io/spring-boot/reference/packaging/container-images/dockerfiles.html).
+It skips tests while packaging; verify separately before building a release image:
+
+```sh
+docker build --tag booker:local .
+```
+
+The included Compose file is a development baseline. Production deployment needs:
+
+- HTTPS, trusted reverse-proxy handling, exact CORS origins and backend-only secrets.
+- Protected persistent PDF storage writable by UID 10001; LOCAL replicas need a
+  shared volume because object storage is not implemented.
+- Protected RabbitMQ vhosts, broker credentials/TLS and quorum-cluster capacity;
+  monitor queue/dead-letter depth and database backlog.
+- Coordinated PostgreSQL/PDF backups, secure encryption-key retention and tested restores.
+- `/api` and OAuth callback routing before SPA fallback; preserved Authorization,
+  Range and response headers; disabled SSE buffering and suitable stream timeouts.
+- Gateway limits for signup, login, recovery, upload and import; no general
+  application rate limiter is implemented.
+- Monitoring for health, disk usage, database/event growth and worker failures.
+
+Only aggregate health is publicly exposed. Grafana/OTel in Compose is development
+infrastructure; production alerting and full trace coverage require deployment
+configuration. Existing SSE subscriptions are authenticated when opened, not
+continuously reauthenticated. Events, retry receipts and document versions do
+not yet have automatic retention. Public administrator uploads have different
+quota behavior from private uploads; enforce deliberate infrastructure limits.
+
+SMTP request notifications and decisions may be delivered more than once; clients and operators should
+expect retryable asynchronous work. Review the
+[engineering limitations](docs/code-quality-review.md#known-limitations) and
+[deployment, backup and cleanup procedures](docs/operations.md#deployment-storage-and-backups)
+before operating at scale.
+
+## Troubleshooting
+
+Missing `JWT_SECRET`/`DATABASE_PASSWORD`, unreachable PostgreSQL, invalid Drive
+settings or Flyway checksum/duplicate-pair errors can prevent startup. Consult
+[operations and troubleshooting](docs/operations.md#troubleshooting) before
+changing schema history or deleting volumes.
+
+| Symptom | First checks |
+| --- | --- |
+| Missing secrets at startup | Export `DATABASE_PASSWORD` and `JWT_SECRET`; Maven does not load `.env` |
+| Database connection or schema failure | Check PostgreSQL readiness, URL/credentials and Flyway logs |
+| Migration checksum mismatch | Restore the applied migration; add a new migration instead of rewriting history |
+| PDF upload rejected | Check size, MIME/extension, PDF content, page limits and writable storage |
+| Cross-workspace book returns 404 | Expected isolation; verify the authenticated account |
+| Drive callback fails | Check exact redirect URI, same-origin binding cookie and proxy forwarding |
+| Email unavailable or pending | Check SMTP, sender and HTTPS reset landing page where required |
+| Health returns 503 without SMTP | Check mail health; isolated environments without email can set `MANAGEMENT_HEALTH_MAIL_ENABLED=false` through external Spring configuration |
+| Email queue stalls | Check RabbitMQ health, queue declarations, SMTP configuration, parked receipts and broker alarms |
+| SSE messages delayed | Check proxy buffering, idle timeout and connection capacity |
+
+## Documentation and contributing
+
+| Document | Purpose |
+| --- | --- |
+| [API.md](API.md) | Complete endpoint, DTO, validation and error reference |
+| [Operations](docs/operations.md) | Configuration, isolated tests, migrations, deployment and troubleshooting |
+| [Engineering review](docs/code-quality-review.md) | Architecture, persistence, transaction invariants and known limitations |
+| [AGENTS.md](AGENTS.md) | Contribution conventions and definition of done |
+| [PROMPTS.md](PROMPTS.md) | Proposed engineering specifications and acceptance criteria |
+
+Feature and client references:
+
+- [PDF documents, storage and reading synchronization](docs/book-reading.md)
+- [Public library and Super Admin](docs/public-library.md)
+- [Book requests and notification email outbox](docs/public-library-requests.md)
+- [RabbitMQ topology, bounded delivery, retries and recovery](docs/request-email-queue.md)
+- [Password management](docs/password-management.md)
+- [Workspace notifications](docs/book-notifications.md)
+- [Android specification](ANDROID_PROMPTS.md)
+- [Angular specification](ANGULAR_PROMPTS.md) and [client contribution rules](ANGULAR_AGENTS.md)
+- [Engineering backlog](PROMPTS.md)
+
+Contributions should preserve API compatibility and workspace isolation, keep
+business rules in services, and include a new Flyway migration for schema changes.
+Update the relevant feature guide and `API.md` when behavior changes. Run checks
+appropriate to the change and report external integrations that remain unverified.
+See [AGENTS.md](AGENTS.md) for the complete contribution rules.

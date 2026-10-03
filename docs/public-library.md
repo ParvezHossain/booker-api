@@ -1,6 +1,6 @@
 # Public Library backend/API
 
-This is an additive backend feature. Existing `/api/books` contracts remain the private library; no Android or Angular code is changed by this implementation. Public means shared by authenticated application accounts, not anonymously downloadable.
+Existing `/api/books` contracts remain the private library; client sources are maintained separately. Public means shared by authenticated application accounts, not anonymously downloadable.
 
 ## Architecture and schema
 
@@ -124,12 +124,7 @@ Back up PostgreSQL and the existing file volume; apply V10 on startup. V1–V9 r
 
 Use one stable JWT key, stable Drive encryption key where enabled, and shared storage across LOCAL replicas. Super Admin privileges are system-owned credentials, never shared owner defaults. Reverse-proxy public upload limits/timeouts are deployment responsibilities; private limits remain enforced. No live Google OAuth changes are part of this feature.
 
-New tests cover Super Admin startup/idempotence/no owner promotion, normal JWT/Basic management, role denial, global listing/details, public/private boundaries, preserved private quotas/events, uncapped public upload versus limited private upload, validation/replacement/retries, Range/HEAD/pinning, shared/isolated workspace progress, 0..100 calculation and completion, invalid pages/revisions/ownership selectors, conflicts/backward navigation/replacement, concurrent updates, summaries, deletion cascades and durable cleanup retries. Migration tests cover populated V9 upgrades and new database constraints. Existing backend regressions must also pass.
+Backend tests cover Super Admin startup/idempotence/no owner promotion, normal JWT/Basic management, role denial, global listing/details, public/private boundaries, preserved private quotas/events, uncapped public upload versus limited private upload, validation/replacement/retries, Range/HEAD/pinning, shared/isolated workspace progress, 0..100 calculation and completion, invalid pages/revisions/ownership selectors, conflicts/backward navigation/replacement, concurrent updates, summaries, deletion cascades and durable cleanup retries. Migration tests cover populated V9 upgrades and new database constraints. Existing backend regressions must also pass.
 
-Validation completed: **92 backend tests passed, zero failures/errors/skips**,
-including the real embedded-server upload test; `./mvnw -DskipTests package` passed.
-Flyway fresh-install and populated-upgrade checks passed on an isolated PostgreSQL
-18 database. `git diff --check` passed. No dedicated lint/static-analysis plugin is
-configured in this project. No frontend source was modified or frontend tests run.
-This is local verification; no production deployment or real Google consent test
-was performed.
+Run [the full verification suite](operations.md#testing) against disposable PostgreSQL.
+Live Google consent and frontend behavior require separate client/deployment checks.

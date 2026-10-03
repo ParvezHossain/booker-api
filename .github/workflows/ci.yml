@@ -1,0 +1,92 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: booker_test
+          POSTGRES_USER: booker_test
+          # Disposable CI-only database credential, never a deployed account.
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U booker_test -d booker_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      rabbitmq:
+        image: rabbitmq:4.2-management
+        env:
+          RABBITMQ_DEFAULT_USER: booker_test
+          RABBITMQ_DEFAULT_PASS: ci-only-broker-password
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: jdbc:postgresql://localhost:5432/booker_test
+      DATABASE_USERNAME: booker_test
+      DATABASE_PASSWORD: ci-only-password
+      BOOK_EVENTS_TEST_JDBC_URL: jdbc:postgresql://localhost:5432/booker_test?user=booker_test&password=ci-only-password
+      BOOK_STORAGE_DIRECTORY: ${{ runner.temp }}/booker-ci-files
+      MANAGEMENT_OTLP_METRICS_EXPORT_URL: ''
+      BOOK_REQUEST_EMAIL_ENABLED: 'false'
+      RABBITMQ_HOST: localhost
+      RABBITMQ_PORT: '5672'
+      RABBITMQ_USERNAME: booker_test
+      RABBITMQ_PASSWORD: ci-only-broker-password
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Java and Maven cache
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Generate ephemeral signing key
+        shell: bash
+        run: |
+          signing_key=$(openssl rand -base64 32)
+          echo "::add-mask::$signing_key"
+          echo "JWT_SECRET=$signing_key" >> "$GITHUB_ENV"
+      - name: Compile, test, verify and package
+        run: ./mvnw -B clean verify
+      - name: Require complete test execution
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import pathlib
+          import xml.etree.ElementTree as ET
+          reports = list(pathlib.Path('target/surefire-reports').glob('TEST-*.xml'))
+          if not reports:
+              raise SystemExit('No test reports found')
+          totals = {key: sum(int(ET.parse(path).getroot().get(key, '0')) for path in reports)
+                    for key in ('tests', 'failures', 'errors', 'skipped')}
+          print(totals)
+          if totals['tests'] == 0 or any(totals[key] for key in ('failures', 'errors', 'skipped')):
+              raise SystemExit('Verification requires executed tests with no failures/errors/skips')
+          PYCODE
+      - name: Validate container build
+        run: docker build --tag booker-ci:verify .

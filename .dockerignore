@@ -3,3 +3,8 @@
 target
 logs
 .env
+.env.*
+data
+.vscode
+.agents
+.codex

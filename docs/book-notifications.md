@@ -7,8 +7,8 @@ Clients should accept that version and use GET /api/books/{bookId} for details.
 
 Connect to `GET /api/books/events` with the same bearer access-token Authorization header (or legacy HTTP Basic header)
 as the book API and `Accept: text/event-stream`. Use HTTPS in deployment.
-Each authenticated subscriber receives only books from their own workspace, including
-replayed events. Register credentials using `/api/auth/signup`.
+Each authenticated workspace subscriber receives only events from its workspace,
+including replayed book creations and public-book-request decisions. Register credentials using `/api/auth/signup`.
 
 ```text
 id: 17
@@ -20,8 +20,7 @@ data: {"eventId":"17","type":"book.created","schemaVersion":2,"occurredAt":"2026
 The first event is `ready`, containing an ID and `{}` data. Persist its ID too.
 With no `Last-Event-ID` header, a connection starts at the current committed
 cursor and receives future events. With that header, all later events are replayed
-in order, then live delivery continues. Use `0` to replay all events since this
-feature was installed. Existing books from before the migration are not announced.
+in order, then live delivery continues. Use `0` to replay all retained workspace events. Existing books from before the migration are not announced.
 Invalid, negative or future cursors return HTTP 400. IDs are opaque decimal strings;
 clients should not convert them to JavaScript numbers.
 
@@ -41,6 +40,14 @@ This is live application delivery. It does not wake a suspended/closed Android a
 or display operating-system notifications. Background push needs a separate
 provider integration (for example FCM) and device registration. Reconnection
 replays events missed while the app was offline.
+
+Request reviews also emit `public-book-request.reviewed` with schemaVersion 1,
+requestId, status, nullable bookId, message and occurredAt. See
+[request decisions](public-library-requests.md) and [API payloads](../API.md#sse-payloads).
+No document, reading-progress or import-completion SSE event exists. Unknown event
+types should be ignored safely; this stream is not a mobile push service.
+Authentication is checked at subscription time; an established stream can continue
+until closure even if a password changes. Reconnection reauthenticates.
 
 ## Persistence and operations
 
