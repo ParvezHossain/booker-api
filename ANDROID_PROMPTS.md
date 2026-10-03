@@ -18,7 +18,7 @@ Paths below are relative to the backend root:
 | --- | --- |
 | Build/configuration | `pom.xml`, `src/main/resources/application.properties`, `compose.yaml`, `README.md` |
 | Authentication | `src/main/java/com/parvez/android/auth/AuthController.java`, `auth/TokenService.java`, `config/SecurityConfig.java` |
-| Workspace/account | `saas/WorkspaceAccounts.java`, `saas/WorkspacePrincipal.java` under the same Java package root |
+| Workspace/account | `saas/WorkspaceAccounts.java`, `saas/WorkspaceController.java`, `saas/WorkspacePrincipal.java` under the same Java package root |
 | Catalogue | `model/Book.java`, `dto/BookRequest.java`, `dto/BookResponse.java`, `repository/BookRepository.java`, `service/BookService.java`, `controller/BookController.java` |
 | Document/version/storage | `document/BookDocument.java`, `BookDocumentController.java`, `BookDocumentService.java`, `BookDocumentRepository.java`, `BookAccess.java`, `PdfInspector.java`; `storage/FileStorageService.java`, `LocalFileStorageService.java` |
 | Progress/conflicts | `reading/ReadingProgress.java`, `ReadingProgressController.java`, `ReadingProgressService.java` |
@@ -356,7 +356,10 @@ The following JSON is valid OpenAPI format (JSON is also accepted by OpenAPI too
       "get": {"operationId": "publicGetBookById", "responses": {"200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Book"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "404": {"description": "Not found or inaccessible", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "400": {"description": "Invalid numeric book ID"}, "403": {"description": "Super Admin required for management; workspace account required for progress"}}, "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}], "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector. "},
       "put": {"operationId": "updatePublicBook", "responses": {"400": {"description": "Invalid input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "401": {"description": "Authentication required or rejected; body may differ", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "409": {"description": "Conflict", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApiError"}}}}, "403": {"description": "Super Admin required"}, "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Book"}}}}, "404": {"description": "Public book not found"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BookRequest"}}}}, "description": "Authenticated public library. Global books; progress/receipts belong to current workspace. No caller-supplied workspace selector.  Super Admin only. No book quota. Exact global public author/title pair unique; independent of private pairs.", "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}]},
       "delete": {"operationId": "deletePublicBook", "description": "Super Admin only. Hard deletion queues every retained file for durable asynchronous cleanup; metadata/workspace progress cascade. Private IDs return 404.", "parameters": [{"name": "bookId", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}}], "responses": {"204": {"description": "Removed; cleanup queued"}, "401": {"description": "Authentication required"}, "403": {"description": "Super Admin required"}, "404": {"description": "Public book not found"}}}
-    }
+    },
+    "/api/auth/change-password": {"post": {"operationId": "change_password", "description": "Authenticated; checks current password and revokes all sessions.", "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["currentPassword", "newPassword"], "properties": {"currentPassword": {"type": "string", "maxLength": 64}, "newPassword": {"type": "string", "minLength": 12, "maxLength": 64}}}}}}, "responses": {"204": {"description": "Success"}, "400": {"description": "Invalid request or credentials/token"}, "401": {"description": "Authentication required"}}}},
+    "/api/auth/forgot-password": {"post": {"operationId": "forgot_password", "description": "Public; generic response, configured SMTP sends single-use reset link.", "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["email"], "properties": {"email": {"type": "string", "format": "email", "maxLength": 254}}}}}}, "responses": {"202": {"description": "Success", "content": {"application/json": {"schema": {"type": "object", "properties": {"message": {"type": "string"}}}}}}, "400": {"description": "Invalid request or credentials/token"}, "503": {"description": "Email not configured"}}, "security": []}},
+    "/api/auth/reset-password": {"post": {"operationId": "reset_password", "description": "Public; consumes emailed token once and revokes all sessions.", "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["token", "newPassword"], "properties": {"token": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}, "newPassword": {"type": "string", "minLength": 12, "maxLength": 64}}}}}}, "responses": {"204": {"description": "Success"}, "400": {"description": "Invalid request or credentials/token"}}, "security": []}}
   },
   "components": {
     "securitySchemes": {
@@ -898,10 +901,655 @@ After implementation:
 
 The backend implementation for the feature above is documented in
 [docs/public-library.md](docs/public-library.md); the full inventory in
-[api.md](api.md) now includes 35 business operations (23 existing + 12 public).
+[api.md](api.md) now includes 38 business operations (23 original + 12 public + 3 password).
 Super Admin uses the existing login flow and is provisioned with initial setup
 secrets. Public progress is workspace-shared; private progress remains personal.
 Public PDF upload uses a raw application/pdf stream to bypass private multipart
 limits while reusing existing secure storage and validation. There is no frontend
 implementation in this backend task. The user-authored feature requirements above
 are preserved.
+
+## Password recovery client integration
+
+See [docs/password-management.md](docs/password-management.md). Implement authenticated change-password and public forgot/reset screens. Capture the emailed HTTPS reset-link token, submit it with a 12–64 character new password, then return to login. On successful change/reset clear local session tokens and stop authenticated jobs: prior access/refresh tokens are revoked. Show the generic 202 message without implying the email is registered. Handle 400 invalid/expired token and 503 email setup unavailable. Backend routes exist; Android UI is not implemented here.
+
+## Backend maintenance review
+
+The backend responsibility and documentation review is recorded in [docs/code-quality-review.md](docs/code-quality-review.md). Existing API methods, payloads and authorization remain unchanged. The generated `/v3/api-docs` now explicitly describes authentication, success/error DTOs, PDF binary/Range responses, and bodyless HEAD responses. Password SMTP delivery is in `auth/SmtpPasswordResetDelivery.java`; token workflows remain in `auth/PasswordService.java`. `OpenApiCoverageTest` checks controller coverage and the 38-business-operation inventory.
+
+
+
+
+Implement the following feature in this **existing Spring Boot project**.
+
+## Feature: Registered Workspace Can Request Books for the Global Public Library
+
+### 1\. First, inspect the existing project
+
+Before making any changes:
+
+- Inspect the existing Spring Boot project structure.
+- Identify the existing entities/models, repositories, services, controllers, DTOs, security/authentication, notification system, email system, file/PDF upload functionality, and Global Public Library implementation.
+- Identify how `SUPER_ADMIN` and registered workspace accounts are currently represented and authorized.
+- Reuse the existing architecture, naming conventions, exception handling, validation, response formats, authentication, and notification/email mechanisms wherever possible.
+- Do **not** introduce duplicate functionality if an equivalent component already exists.
+- Do **not** break or modify existing Global Public Library behavior unnecessarily.
+
+After understanding the existing implementation, implement the feature below consistently with the project's current architecture.
+
+---
+
+# 2\. Business Requirement
+
+Currently:
+
+- A `SUPER_ADMIN` can add books to the **Global Public Library**.
+- Registered workspace accounts can access/read those public library books.
+
+Add a new feature:
+
+> A registered workspace account must be able to request a book to be added to the Global Public Library.
+
+The request workflow must be:
+
+1. A registered workspace submits a book request.
+2. The workspace provides only:
+    - `title`
+    - `authorName`
+3. The request is stored with the requesting workspace/account information.
+4. `SUPER_ADMIN` can see all requested books.
+5. `SUPER_ADMIN` can review each request.
+6. `SUPER_ADMIN` can either:
+    - accept the request by uploading the PDF/book, or
+    - reject the request.
+7. When accepted:
+    - The uploaded PDF should be added to the Global Public Library using the project's existing library/book creation mechanism.
+    - The request status becomes `ACCEPTED`.
+8. When rejected:
+    - The request status becomes `REJECTED`.
+    - No book should be added to the Global Public Library.
+9. The requesting workspace must receive a notification:
+    - through the application's existing notification mechanism, and
+    - through the registered email address associated with the workspace/account.
+10. The notification must clearly indicate whether the request was accepted or rejected.
+
+---
+
+# 3\. Workspace Request Form
+
+When a registered workspace requests a book, the request API/UI must expose only:
+
+- `title`
+- `authorName`
+
+The workspace must **not** be required to provide the remaining book/library metadata.
+
+For example:
+
+```
+{
+  "title": "Clean Code",
+  "authorName": "Robert C. Martin"
+}
+```
+
+The backend must automatically associate the request with the currently authenticated workspace/account.
+
+Do **not** allow the client to submit or override the requester/workspace ID.
+
+Use the authenticated user's/workspace's identity from the existing security context.
+
+---
+
+# 4\. Request Entity / Persistence
+
+Create an appropriate entity for book requests, following the project's existing naming conventions.
+
+For example, conceptually:
+
+```
+PublicLibraryBookRequest
+```
+
+The exact name should follow the existing project's conventions.
+
+The request should contain at least:
+
+- unique ID
+- requested book title
+- requested author name
+- requesting workspace/account reference
+- request status
+- created timestamp
+- updated/reviewed timestamp if appropriate
+- reviewed/rejected/accepted information if the existing architecture supports audit information
+
+Suggested statuses:
+
+```
+PENDING
+ACCEPTED
+REJECTED
+```
+
+Use the project's existing enum/status conventions if available.
+
+The request should initially be created with:
+
+```
+PENDING
+```
+
+Do not allow a workspace to directly set `ACCEPTED` or `REJECTED`.
+
+---
+
+# 5\. SUPER\_ADMIN Request List
+
+Add functionality for `SUPER_ADMIN` to retrieve requested books.
+
+The list should provide enough information for the administrator to review the request, including:
+
+- request ID
+- title
+- author name
+- requesting workspace/account
+- request status
+- created date
+- review date if available
+
+The list should support the existing project's pagination/filtering conventions if those already exist.
+
+At minimum, `SUPER_ADMIN` must be able to see pending requests.
+
+If the project already has a standard admin list/search pattern, follow that pattern.
+
+---
+
+# 6\. SUPER\_ADMIN Accept / Upload PDF
+
+For a pending request, `SUPER_ADMIN` must have the ability to accept the request by uploading the requested book PDF.
+
+Conceptually, the administrator operation should support:
+
+```
+Request ID
++
+PDF file
++
+any additional existing Global Public Library fields that are currently required
+```
+
+Important:
+
+The workspace only submits:
+
+```
+title
+authorName
+```
+
+But the `SUPER_ADMIN` should be able to provide the **remaining fields required by the existing Global Public Library book model** when processing the request.
+
+For example, if the existing public-library book entity contains fields such as:
+
+- description
+- category
+- ISBN
+- publisher
+- publication date
+- language
+- cover image
+- PDF/file
+- etc.
+
+then those fields should remain administrator-controlled.
+
+Do not invent fields that do not exist in the current project.
+
+Reuse the existing Global Public Library upload/create service wherever possible.
+
+The administrator acceptance process should:
+
+1. Verify that the request exists.
+2. Verify that it is currently `PENDING`.
+3. Validate the uploaded PDF using the project's existing file validation rules.
+4. Create/add the book to the Global Public Library using the existing book creation logic.
+5. If book creation succeeds, update the request status to `ACCEPTED`.
+6. Send an application notification to the requesting workspace.
+7. Send an email notification to the registered email address.
+8. Return an appropriate success response.
+
+The operation should be transactional where appropriate so that the request does not become `ACCEPTED` if the library book creation fails.
+
+---
+
+# 7\. SUPER\_ADMIN Reject Request
+
+Add a `SUPER_ADMIN` operation to reject a pending request.
+
+Conceptually:
+
+```
+POST /.../{requestId}/reject
+```
+
+Use the project's existing REST API conventions instead of blindly using this exact endpoint.
+
+The rejection operation must:
+
+1. Verify that the request exists.
+2. Verify that it is currently `PENDING`.
+3. Change the request status to `REJECTED`.
+4. Persist the change.
+5. Send an application notification to the requesting workspace.
+6. Send an email notification to the registered email address.
+7. Return an appropriate response.
+
+If the existing project supports rejection reasons, integrate with that mechanism. Otherwise, do not unnecessarily introduce a required rejection-reason field unless it is useful and consistent with the current architecture.
+
+---
+
+# 8\. Prevent Invalid State Changes
+
+Implement appropriate business validation.
+
+Examples:
+
+- A non-authenticated user cannot create a request.
+- A workspace user cannot create a request on behalf of another workspace.
+- A workspace user cannot accept/reject requests.
+- Only `SUPER_ADMIN` can review requests.
+- A `PENDING` request can be accepted or rejected.
+- An `ACCEPTED` request cannot be accepted again.
+- An `ACCEPTED` request cannot subsequently be rejected.
+- A `REJECTED` request cannot subsequently be accepted unless the existing business architecture explicitly supports reopening requests.
+- Do not allow a request to be processed multiple times because of duplicate API calls.
+
+Use the project's existing authorization/security mechanisms.
+
+---
+
+# 9\. Application Notification
+
+When the request is processed, notify the requesting workspace using the project's existing in-app notification system.
+
+### Accepted notification
+
+The notification should communicate that the requested book was accepted and added to the Global Public Library.
+
+Example message:
+
+```
+Your requested book "Clean Code" by Robert C. Martin has been accepted and added to the Global Public Library.
+```
+
+### Rejected notification
+
+Example:
+
+```
+Your requested book "Clean Code" by Robert C. Martin has been rejected by the administrator.
+```
+
+Follow the project's existing notification entity, notification types, message structure, recipient model, and delivery mechanism instead of creating a parallel notification system.
+
+---
+
+# 10\. Email Notification
+
+Send an email to the registered email address of the requesting workspace/account after the request has been processed.
+
+### Accepted email
+
+The email should clearly communicate:
+
+- requested book title
+- author
+- accepted status
+- that the book has been added to the Global Public Library
+
+### Rejected email
+
+The email should clearly communicate:
+
+- requested book title
+- author
+- rejected status
+
+Reuse the project's existing email service/templates if available.
+
+Do not send the email before the request/book operation has successfully completed.
+
+If the project's email system is asynchronous, follow its existing implementation.
+
+---
+
+# 11\. API Design
+
+Follow the existing project's API conventions.
+
+Conceptually, the APIs should provide functionality equivalent to:
+
+### Workspace
+
+```
+POST /public-library/book-requests
+```
+
+Request:
+
+```
+{
+  "title": "Clean Code",
+  "authorName": "Robert C. Martin"
+}
+```
+
+The backend determines the workspace/account from authentication.
+
+### SUPER\_ADMIN
+
+```
+GET /admin/public-library/book-requests
+```
+
+Retrieve requests.
+
+### SUPER\_ADMIN — Accept
+
+```
+POST /admin/public-library/book-requests/{requestId}/accept
+```
+
+Multipart request containing:
+
+- PDF
+- existing Global Public Library metadata required by the current implementation
+
+### SUPER\_ADMIN — Reject
+
+```
+POST /admin/public-library/book-requests/{requestId}/reject
+```
+
+These are conceptual endpoints only. Use the project's existing endpoint naming/versioning conventions.
+
+---
+
+# 12\. Validation
+
+Implement proper validation.
+
+For workspace requests:
+
+- `title` is required.
+- `title` must not be blank.
+- `authorName` is required.
+- `authorName` must not be blank.
+- Apply reasonable existing project length constraints if the project already defines them.
+
+For PDF upload:
+
+- Reuse existing Global Public Library file validation.
+- Ensure the uploaded file is actually accepted by the existing PDF/file validation rules.
+- Do not duplicate file validation logic if a reusable validator/service already exists.
+
+Return validation errors using the project's existing error-response format.
+
+---
+
+# 13\. Duplicate Requests
+
+Inspect the existing database/business rules before deciding how duplicate requests should behave.
+
+At minimum, avoid accidental duplicate processing of the same request.
+
+If there is already an existing public-library book matching the requested title/author, follow the project's existing duplicate-book rules.
+
+If no such rule exists, implement a sensible server-side validation to prevent obvious duplicate processing without unnecessarily preventing legitimate requests.
+
+---
+
+# 14\. Database Migration
+
+If this project uses:
+
+- Flyway
+- Liquibase
+- JPA/Hibernate schema generation
+- or another migration mechanism
+
+follow the existing mechanism.
+
+Add the required database table/columns/indexes for book requests.
+
+Do not manually modify production schema outside the project's established migration process.
+
+---
+
+# 15\. Security
+
+Use the project's existing authentication and authorization system.
+
+Required access:
+
+### Registered workspace
+
+Can:
+
+- create a book request
+- view their own request status if the existing UI/API architecture supports this
+
+Cannot:
+
+- view other workspace requests
+- accept/reject requests
+- upload the final public-library PDF as an admin action
+
+### SUPER\_ADMIN
+
+Can:
+
+- view requests
+- review requests
+- upload the PDF
+- accept requests
+- reject requests
+
+Do not expose administrator-only APIs to normal workspace users.
+
+---
+
+# 16\. Workspace Request History
+
+If the project already has a workspace dashboard/request-history pattern, add the requested-book requests there.
+
+A workspace should be able to see at least:
+
+- title
+- author
+- status
+- submitted date
+- processed date if available
+
+If the project does not currently have such a feature, keep this optional and do not build an unrelated large UI subsystem unless required by the existing architecture.
+
+---
+
+# 17\. Important Architectural Requirements
+
+Before coding:
+
+1. Find the existing Global Public Library implementation.
+2. Find the existing book entity/model.
+3. Find how books are uploaded.
+4. Find how workspace accounts are represented.
+5. Find how `SUPER_ADMIN` authorization works.
+6. Find the existing notification implementation.
+7. Find the existing email implementation.
+8. Find the existing file/PDF storage implementation.
+9. Find the existing API response/error conventions.
+10. Find the existing database migration strategy.
+
+Then integrate this feature into those existing components.
+
+**Do not create parallel implementations when reusable services already exist.**
+
+For example:
+
+- Do not create a second file-storage service if one already exists.
+- Do not create a second email service if one already exists.
+- Do not create a second notification system if one already exists.
+- Do not create a second authentication mechanism.
+- Do not duplicate Global Public Library book creation logic.
+
+---
+
+# 18\. Transaction and Failure Handling
+
+Pay particular attention to failure scenarios.
+
+For acceptance:
+
+```
+PENDING
+   ↓
+SUPER_ADMIN uploads PDF
+   ↓
+Validate request
+   ↓
+Create Global Public Library book
+   ↓
+Book successfully created
+   ↓
+Mark request ACCEPTED
+   ↓
+Send notification
+   ↓
+Send email
+```
+
+If the book creation fails:
+
+```
+Request remains PENDING
+```
+
+Do not mark the request as `ACCEPTED` if the library book was not successfully created.
+
+If notification/email delivery fails after successful processing, follow the existing project's notification/email retry/error-handling architecture. Do not roll back a successfully created library book solely because an external email delivery operation failed unless the existing architecture explicitly requires that behavior.
+
+---
+
+# 19\. Tests
+
+Add/update automated tests following the project's existing testing conventions.
+
+At minimum, cover:
+
+### Workspace request
+
+- authenticated workspace can create a request
+- title validation
+- author validation
+- requester is derived from authentication
+- workspace cannot submit another workspace's ID
+
+### SUPER\_ADMIN request list
+
+- SUPER\_ADMIN can retrieve requests
+- normal workspace user cannot retrieve the admin request list
+
+### Accept
+
+- SUPER\_ADMIN can accept a pending request
+- PDF validation works
+- requested book is added to Global Public Library
+- request status becomes `ACCEPTED`
+- application notification is generated
+- email notification is triggered
+
+### Reject
+
+- SUPER\_ADMIN can reject a pending request
+- request status becomes `REJECTED`
+- application notification is generated
+- email notification is triggered
+
+### Invalid transitions
+
+- accepted request cannot be accepted again
+- accepted request cannot be rejected
+- rejected request cannot be accepted
+- unauthorized users cannot process requests
+
+### Failure handling
+
+- if book creation fails, request remains `PENDING`
+- notification/email failures follow existing error-handling behavior
+
+Use mocks/stubs for external email/file-storage dependencies where appropriate.
+
+---
+
+# 20\. Code Quality
+
+Follow the existing project's:
+
+- package structure
+- naming conventions
+- Lombok usage
+- DTO conventions
+- service/repository patterns
+- exception handling
+- logging conventions
+- validation style
+- API response format
+- security conventions
+- test conventions
+
+Keep the implementation focused and maintainable.
+
+Avoid unnecessary refactoring of unrelated code.
+
+Do not introduce new dependencies unless absolutely necessary.
+
+---
+
+# 21\. Deliverables
+
+Implement the complete feature in the existing project, including all necessary:
+
+- entity/model changes
+- enum/status changes
+- repository
+- DTOs
+- service/business logic
+- controller/API endpoints
+- security/authorization
+- database migration
+- notification integration
+- email integration
+- PDF upload integration
+- validation
+- exception handling
+- tests
+
+After implementation:
+
+1. Run the project's relevant tests.
+2. Fix compilation errors.
+3. Fix failing tests caused by the implementation.
+4. Verify that existing Global Public Library functionality still works.
+5. Provide a concise summary of:
+    - files changed
+    - APIs added/changed
+    - database changes
+    - notification/email behavior
+    - tests added
+    - any assumptions made
+
+### Critical instruction
+
+**Do not start by blindly creating new classes. First inspect the existing project and integrate with its current Global Public Library, authentication, workspace, notification, email, file-upload, and database architecture.**

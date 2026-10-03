@@ -42,7 +42,7 @@ public class PublicBookService {
         WorkspacePrincipal.requireSuperAdmin();
         Book book = new Book();
         book.setLibraryType("PUBLIC");
-        metadata(book, request);
+        mapper.applyMetadata(book, request);
         return mapper.toBookResponse(books.saveAndFlush(book));
     }
     @Transactional
@@ -50,7 +50,7 @@ public class PublicBookService {
         WorkspacePrincipal.requireSuperAdmin();
         access.lockPublic(bookId);
         Book book = book(bookId);
-        metadata(book, request);
+        mapper.applyMetadata(book, request);
         var result = mapper.toBookResponse(books.saveAndFlush(book));
         jdbc.update("UPDATE books SET updated_at = now() WHERE id = ?", bookId);
         return result;
@@ -70,10 +70,5 @@ public class PublicBookService {
     private Book book(long id) {
         return books.findByIdAndLibraryType(id, "PUBLIC")
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Public book not found"));
-    }
-    private void metadata(Book book, BookRequest request) {
-        book.setTitle(request.title()); book.setAuthor(request.author());
-        book.setPublishedDate(request.publishedDate()); book.setDescription(request.description());
-        book.setCompleted(request.completed());
     }
 }

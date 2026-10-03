@@ -43,15 +43,19 @@ public class SecurityConfig {
                         .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers(HttpMethod.GET, SWAGGER_WHITELIST).permitAll()
 
-                        // Require authentication for all endpoints under /api/books (including sub-paths)
-                        .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout").permitAll()
+                        // These public routes authenticate through credentials, a refresh/reset token, or bound OAuth state.
+                        .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/forgot-password", "/api/auth/reset-password").permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health", "/api/integrations/google-drive/callback").permitAll()
+                        .requestMatchers("/api/admin/public-book-requests/**", "/api/admin/public-book-requests").hasRole("SUPER_ADMIN")
+                        .requestMatchers("/api/public-book-requests").authenticated()
+                        // Match progress before general PUT management: workspace users may save progress.
                         .requestMatchers(HttpMethod.POST, "/api/public-books", "/api/public-books/**").hasRole("SUPER_ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/public-books/**").hasRole("SUPER_ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/public-books/*/reading-progress").authenticated()
                         .requestMatchers(HttpMethod.PUT, "/api/public-books/**").hasRole("SUPER_ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/public-books", "/api/public-books/**").authenticated()
                         .requestMatchers(HttpMethod.HEAD, "/api/public-books/**").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/change-password").authenticated()
                         .requestMatchers("/api/books/**", "/api/workspace", "/api/integrations/google-drive/**").authenticated()
                         .anyRequest().denyAll())
                 .formLogin(form -> form.disable())

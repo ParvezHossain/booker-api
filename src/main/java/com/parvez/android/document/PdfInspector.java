@@ -52,6 +52,7 @@ public class PdfInspector {
         }
     }
     private void rejectActiveContent(org.apache.pdfbox.cos.COSBase root) {
+        // PDF objects can be cyclic; bound traversal and track identity rather than recursing.
         var pending = new java.util.ArrayDeque<org.apache.pdfbox.cos.COSBase>();
         var seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<org.apache.pdfbox.cos.COSBase, Boolean>());
         pending.add(root);

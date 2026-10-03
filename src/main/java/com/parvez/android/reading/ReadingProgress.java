@@ -5,10 +5,10 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.UUID;
 
-/** Personal completion is based on the furthest page of this document, never Book.completed. */
+/** Completion is based on the furthest page of this document, never Book.completed. */
 public record ReadingProgress(long bookId, UUID documentId, int currentPage, int totalPages, int pagesRead,
                               BigDecimal progressPercentage, Instant lastReadAt,
-                              @io.swagger.v3.oas.annotations.media.Schema(description = "True when this account has reached the final page of this document. Backward navigation preserves completion; document replacement resets it. Independent of Book.completed and rounded percentage.")
+                              @io.swagger.v3.oas.annotations.media.Schema(description = "True when the account (private) or workspace (public) has reached the final page of this document. Backward navigation preserves completion; document replacement resets it. Independent of Book.completed and rounded percentage.")
                               boolean completed,
                               int resumePage, long version) {
     public static ReadingProgress of(long bookId, UUID documentId, int current, int total, int maximum, Instant lastRead, long version) {

@@ -89,7 +89,7 @@ public class BookEventStream {
                 var events = store.after(cursor, workspaceId);
                 for (var event : events) {
                     if (closed.get()) return;
-                    emitter.send(SseEmitter.event().name("book.created").id(Long.toString(event.id()))
+                    emitter.send(SseEmitter.event().name(event.type()).id(Long.toString(event.id()))
                             .data(event.payload(), MediaType.APPLICATION_JSON));
                     cursor = event.id();
                 }

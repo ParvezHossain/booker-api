@@ -105,7 +105,7 @@ Public Library validation: all 92 backend tests passed with none skipped, includ
 a real HTTP public/private upload-limit check; the backend package build passed.
 
 See [Public Library APIs, setup, schema and examples](docs/public-library.md) and
-[complete 35-operation API inventory](api.md).
+[complete 38-operation API inventory](api.md).
 
 ## Upload and read PDFs
 
@@ -299,3 +299,17 @@ The empty workspace originally created for that owner remains in the database.
 For an existing PostgreSQL deployment, retain its current database/volume and point
 `DATABASE_URL` at it; the supplied Compose configuration creates a new PostgreSQL
 18 volume and does not upgrade an old database volume automatically.
+
+## Password change and recovery
+
+Three password endpoints are documented in [docs/password-management.md](docs/password-management.md). V11 adds expiring, hashed, single-use reset tokens and credential versions. Password changes revoke existing access/refresh tokens. Configure SMTP and `PASSWORD_RESET_FROM` / `PASSWORD_RESET_URL` for reset emails; Android/Angular reset screens are not part of this backend change.
+
+## Backend maintenance
+
+[The design and Swagger review](docs/code-quality-review.md) records the SOLID/KISS/DRY refactors, shared helpers, important invariants and automated API documentation checks.
+
+Registered workspaces can request Global Public Library books; Super Admin can
+accept requests with a validated PDF or reject them. See
+[book request APIs and deployment notes](docs/public-library-requests.md).
+Decision notifications use the existing workspace SSE stream, and emails use
+the configured SMTP sender with a persistent retry outbox.

@@ -1,6 +1,5 @@
 package com.parvez.android.dto;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 public record ApiError(

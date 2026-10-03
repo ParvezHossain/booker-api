@@ -4,11 +4,11 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
-@Schema(description = "Payload required to create a book in your workspace")
+@Schema(description = "Editable metadata for private and public books")
 public record BookRequest(
 
         @Schema(
-                description = "Title of the book; the exact author/title pair must be unique within your workspace",
+                description = "Title of the book; the exact author/title pair must be unique within its private workspace or globally in the public library",
                 example = "Effective Java",
                 requiredMode = Schema.RequiredMode.REQUIRED
         )
@@ -42,7 +42,7 @@ public record BookRequest(
         String description,
 
         @Schema(
-                description = "Manually supplied workspace book status. Independent of each account's PDF reading completion.",
+                description = "Manually supplied book status. Independent of personal or workspace PDF reading completion.",
                 example = "true"
         )
         boolean completed

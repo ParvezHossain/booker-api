@@ -1,15 +1,13 @@
 package com.parvez.android.drive;
 
 import com.parvez.android.saas.WorkspacePrincipal;
+import com.parvez.android.security.OpaqueTokens;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriComponentsBuilder;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.SecureRandom;
 import java.util.*;
 
 @Service
@@ -26,15 +24,15 @@ public class GoogleDriveConnectionService {
     public Connect begin() {
         enabled();
         String email = WorkspacePrincipal.currentEmail();
-        String state = random(), binding = random(), verifier = random();
+        String state = OpaqueTokens.random(), binding = OpaqueTokens.random(), verifier = OpaqueTokens.random();
         jdbc.update("DELETE FROM google_drive_oauth_states WHERE expires_at <= now() OR user_email = ?", email);
         jdbc.update("INSERT INTO google_drive_oauth_states (state_hash, binding_hash, user_email, verifier_encrypted, expires_at) VALUES (?, ?, ?, ?, now() + interval '10 minutes')",
-                hash(state), hash(binding), email, cipher.encrypt(verifier, email));
+                OpaqueTokens.sha256Hex(state), OpaqueTokens.sha256Hex(binding), email, cipher.encrypt(verifier, email));
         String url = UriComponentsBuilder.fromUriString("https://accounts.google.com/o/oauth2/v2/auth")
                 .queryParam("client_id", settings.clientId()).queryParam("redirect_uri", settings.redirectUri())
                 .queryParam("response_type", "code").queryParam("scope", GoogleDriveGateway.SCOPE)
                 .queryParam("access_type", "offline").queryParam("prompt", "consent")
-                .queryParam("state", state).queryParam("code_challenge", Base64.getUrlEncoder().withoutPadding().encodeToString(digest(verifier)))
+                .queryParam("state", state).queryParam("code_challenge", Base64.getUrlEncoder().withoutPadding().encodeToString(OpaqueTokens.sha256(verifier)))
                 .queryParam("code_challenge_method", "S256").build().encode().toUriString();
         return new Connect(url, binding);
     }
@@ -42,7 +40,7 @@ public class GoogleDriveConnectionService {
         enabled();
         if (state == null || binding == null || code == null || state.length() > 200 || code.length() > 4096)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid Google authorization response");
-        var rows = transaction.execute(status -> jdbc.queryForList("DELETE FROM google_drive_oauth_states WHERE state_hash = ? AND binding_hash = ? AND expires_at > now() RETURNING user_email, verifier_encrypted", hash(state), hash(binding)));
+        var rows = transaction.execute(status -> jdbc.queryForList("DELETE FROM google_drive_oauth_states WHERE state_hash = ? AND binding_hash = ? AND expires_at > now() RETURNING user_email, verifier_encrypted", OpaqueTokens.sha256Hex(state), OpaqueTokens.sha256Hex(binding)));
         if (rows == null || rows.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Google authorization expired or belongs to another browser; connect again");
         String email = (String) rows.getFirst().get("user_email");
         var tokens = gateway.exchange(code, cipher.decrypt((String) rows.getFirst().get("verifier_encrypted"), email));
@@ -82,11 +80,5 @@ public class GoogleDriveConnectionService {
         return Map.of("accessToken", accessToken(), "apiKey", settings.pickerApiKey(), "appId", settings.projectNumber());
     }
     private void enabled() { if (!settings.enabled()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Google Drive is not configured"); }
-    private String random() { byte[] value = new byte[32]; new SecureRandom().nextBytes(value); return Base64.getUrlEncoder().withoutPadding().encodeToString(value); }
-    private static byte[] digest(String value) {
-        try { return MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)); }
-        catch (Exception ex) { throw new IllegalStateException(ex); }
-    }
-    private static String hash(String value) { return HexFormat.of().formatHex(digest(value)); }
     public record Connect(String url, String binding) {}
 }

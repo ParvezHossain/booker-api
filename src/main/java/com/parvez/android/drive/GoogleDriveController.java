@@ -1,6 +1,9 @@
 package com.parvez.android.drive;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import com.parvez.android.dto.ApiError;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,6 +28,9 @@ public class GoogleDriveController {
     @Operation(summary = "Start Google OAuth", description = "Returns an authorization URL and sets an HttpOnly browser-binding cookie. Open the URL in the same browser. Native clients must retain the cookie for their browser-based flow. Requests only drive.file.")
     @SecurityRequirement(name = "bearerAuth")
     @SecurityRequirement(name = "basicAuth")
+    @ApiResponse(responseCode = "200", description = "JSON authorizationUrl and HttpOnly browser-binding cookie", content = @Content(mediaType = "application/json"))
+    @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
+    @ApiResponse(responseCode = "503", description = "Google Drive is not configured", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @PostMapping("/api/integrations/google-drive/connect")
     public ResponseEntity<Map<String, String>> connect(HttpServletRequest request) {
         var result = connections.begin();
@@ -33,6 +39,10 @@ public class GoogleDriveController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header(HttpHeaders.SET_COOKIE, cookie.toString()).body(Map.of("authorizationUrl", result.url()));
     }
     @Operation(summary = "OAuth callback", description = "Google browser callback; validated one-time state and browser binding replace API authentication here. No Google credential is returned.", security = {})
+    @ApiResponse(responseCode = "200", description = "Connection complete; close the browser tab", content = @Content(mediaType = "text/html", schema = @Schema(type = "string")))
+    @ApiResponse(responseCode = "400", description = "Missing, expired or browser-mismatched OAuth state or required scope", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "403", description = "Google denied authorization", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "503", description = "Google Drive unavailable or not configured", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @GetMapping(value = CALLBACK, produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> callback(@RequestParam(required = false) String state, @RequestParam(required = false) String code,
             @CookieValue(name = "booker_drive_binding", required = false) String binding) {
@@ -44,22 +54,36 @@ public class GoogleDriveController {
     @Operation(summary = "Check Google Drive connection")
     @SecurityRequirement(name = "bearerAuth")
     @SecurityRequirement(name = "basicAuth")
+    @ApiResponse(responseCode = "200", description = "JSON connected boolean; false when disabled or not connected", content = @Content(mediaType = "application/json"))
+    @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
     @GetMapping("/api/integrations/google-drive/connection")
     public ResponseEntity<Map<String, Boolean>> connection() { return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Map.of("connected", connections.connected())); }
     @Operation(summary = "Disconnect Google Drive", description = "Deletes local OAuth credentials and cancels pending imports. Already imported PDFs remain available; an import already running may finish. Google account consent can also be revoked in Google account settings.")
     @SecurityRequirement(name = "bearerAuth")
     @SecurityRequirement(name = "basicAuth")
+    @ApiResponse(responseCode = "204", description = "Local connection removed, including when already disconnected", content = @Content)
+    @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
     @DeleteMapping("/api/integrations/google-drive/connection")
     public ResponseEntity<Void> disconnect() { connections.disconnect(); return ResponseEntity.noContent().build(); }
     @Operation(summary = "Get short-lived Google Picker configuration", description = "Contains a selected-file scoped access token and a public restricted Picker API key. Never includes refresh tokens or OAuth client secrets; keep this response in memory only.")
     @SecurityRequirement(name = "bearerAuth")
     @SecurityRequirement(name = "basicAuth")
+    @ApiResponse(responseCode = "200", description = "JSON accessToken, apiKey and appId; never cache", content = @Content(mediaType = "application/json"))
+    @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
+    @ApiResponse(responseCode = "403", description = "Google access was revoked or denied", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "409", description = "Connect Google Drive first", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "503", description = "Google Picker is not configured or Drive unavailable", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @GetMapping("/api/integrations/google-drive/picker")
     public ResponseEntity<Map<String, String>> picker() { return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(connections.picker()); }
     @Operation(summary = "Import a selected Drive PDF", description = "Returns 202 and a durable import operation. Idempotency-Key is a UUID. Only Drive file IDs are accepted, never URLs. Imports use the connected account and the same PDF validation/storage pipeline as uploads.")
     @SecurityRequirement(name = "bearerAuth")
     @SecurityRequirement(name = "basicAuth")
-    @ApiResponse(responseCode = "202", description = "Import accepted; poll Location for status")
+    @ApiResponse(responseCode = "202", description = "Import accepted; poll Location for status", content = @Content(mediaType = "application/json"))
+    @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
+    @ApiResponse(responseCode = "400", description = "Invalid file ID, book ID or idempotency UUID", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "403", description = "A workspace account is required", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "404", description = "Book not found in this workspace", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "409", description = "Connect Google Drive first or operation ID used for another file", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @PostMapping("/api/books/{bookId}/document/imports/google-drive")
     public ResponseEntity<GoogleDriveImportService.ImportStatus> start(@PathVariable long bookId, @RequestHeader("Idempotency-Key") UUID operation, @Valid @RequestBody Import request) {
         return ResponseEntity.accepted().location(URI.create("/api/books/" + bookId + "/document/imports/" + operation)).body(imports.start(bookId, operation, request.fileId()));
@@ -67,7 +91,13 @@ public class GoogleDriveController {
     @Operation(summary = "Get your Drive import status")
     @SecurityRequirement(name = "bearerAuth")
     @SecurityRequirement(name = "basicAuth")
+    @ApiResponse(responseCode = "200", description = "Import ID, fileId, status, nullable documentId and failure message", content = @Content(mediaType = "application/json"))
+    @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
+    @ApiResponse(responseCode = "400", description = "Invalid book ID or import UUID", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "403", description = "A workspace account is required", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "404", description = "Book or account-owned import not found", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @GetMapping("/api/books/{bookId}/document/imports/{importId}")
     public GoogleDriveImportService.ImportStatus status(@PathVariable long bookId, @PathVariable UUID importId) { return imports.status(bookId, importId); }
-    public record Import(@NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{1,200}") String fileId) {}
+    @Schema(name = "DriveImportRequest")
+    public record Import(@Schema(description = "File ID selected in Google Picker; URLs are not accepted", example = "selected-drive-file-id") @NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{1,200}") String fileId) {}
 }

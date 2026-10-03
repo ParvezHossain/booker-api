@@ -39,11 +39,15 @@ public class BookDocumentService {
     }
     public BookDocument active(long bookId) {
         access.require(bookId);
-        return documents.active(bookId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Book has no PDF"));
+        return activeDocument(bookId);
     }
     public BookDocument activePublic(long bookId) {
         access.requirePublic(bookId);
-        return documents.active(bookId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Book has no PDF"));
+        return activeDocument(bookId);
+    }
+    private BookDocument activeDocument(long bookId) {
+        return documents.active(bookId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Book has no PDF"));
     }
     public BookDocument uploadPublic(long bookId, UUID operation, String name, InputStream input) throws IOException {
         WorkspacePrincipal.requireSuperAdmin();
@@ -77,6 +81,7 @@ public class BookDocumentService {
         catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Document storage is unavailable");
         }
+        // Validate outside the database transaction; keep locks short while parsing large files.
         boolean retained = false;
         try {
             int pages = publicLibrary ? inspector.inspectPublic(storage.download(stored.key()))
@@ -100,6 +105,17 @@ public class BookDocumentService {
                 return documents.active(bookId).orElseThrow();
             });
             retained = result != null && result.storageKey().equals(stored.key());
+            if (retained && org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                        new org.springframework.transaction.support.TransactionSynchronization() {
+                            @Override public void afterCompletion(int status) {
+                                if (status != STATUS_COMMITTED) {
+                                    try { storage.delete(stored.key()); }
+                                    catch (IOException ex) { log.warn("Could not remove rolled back document upload"); }
+                                }
+                            }
+                        });
+            }
             return result;
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Document storage is unavailable");

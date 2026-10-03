@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.List;
 import java.util.UUID;
 
+/** Shared revision/idempotency rules; scopes keep private-account and public-workspace persistence isolated. */
 @Service
 public class ReadingProgressService {
     private final BookAccess access;
@@ -19,6 +20,7 @@ public class ReadingProgressService {
     public ReadingProgressService(BookAccess access, BookDocumentRepository documents, JdbcTemplate jdbc) {
         this.access = access; this.documents = documents; this.jdbc = jdbc;
     }
+    // SQL identifiers come only from this closed enum; callers never supply a table or tenant column.
     private enum Scope {
         ACCOUNT("reading_progress", "reading_progress_operations", "user_email"),
         WORKSPACE("public_reading_progress", "public_reading_progress_operations", "workspace_id");

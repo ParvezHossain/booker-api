@@ -1,9 +1,6 @@
 package com.parvez.android.drive;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.scheduling.annotation.EnableScheduling;
 
 @ConfigurationProperties("books.google-drive")
 public record GoogleDriveSettings(boolean enabled, String clientId, String clientSecret, String redirectUri,
@@ -20,8 +17,3 @@ public record GoogleDriveSettings(boolean enabled, String clientId, String clien
     }
     private static boolean blank(String value) { return value == null || value.isBlank(); }
 }
-
-@Configuration
-@EnableScheduling
-@EnableConfigurationProperties(GoogleDriveSettings.class)
-class GoogleDriveConfiguration {}

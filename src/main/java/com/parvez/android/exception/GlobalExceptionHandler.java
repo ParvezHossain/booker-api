@@ -131,8 +131,7 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
 
-        // IMPORTANT:
-        // Log the actual exception. Do not expose it to the client.
+        // Preserve diagnostic context in server logs while returning a stable, non-sensitive API error.
         log.error(
                 "Unhandled exception on {} {}",
                 request.getMethod(),

@@ -18,9 +18,11 @@ public class BookEventStore {
     }
 
     public List<Event> after(long cursor, java.util.UUID workspaceId) {
-        return jdbc.query("SELECT id, payload FROM book_events WHERE id > ? AND workspace_id = ? ORDER BY id LIMIT 100",
-                (rs, row) -> new Event(rs.getLong("id"), rs.getString("payload")), cursor, workspaceId);
+        return jdbc.query("SELECT id, payload, event_type FROM book_events WHERE id > ? AND workspace_id = ? ORDER BY id LIMIT 100",
+                (rs, row) -> new Event(rs.getLong("id"), rs.getString("payload"), rs.getString("event_type")), cursor, workspaceId);
     }
 
-    public record Event(long id, String payload) {}
+    public record Event(long id, String payload, String type) {
+        public Event(long id, String payload) { this(id, payload, "book.created"); }
+    }
 }

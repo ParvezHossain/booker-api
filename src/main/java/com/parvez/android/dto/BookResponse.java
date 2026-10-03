@@ -20,7 +20,7 @@ public record BookResponse(
         @Schema(description = "Detailed description of the book", example = "A comprehensive guide to Java programming best practices.")
         String description,
 
-        @Schema(description = "Manual workspace book status, independent of personal PDF reading completion.", example = "true")
+        @Schema(description = "Manual book status, independent of personal or workspace PDF reading completion.", example = "true")
         boolean completed
 ) {
 }

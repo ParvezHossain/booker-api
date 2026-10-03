@@ -39,6 +39,7 @@ public class LocalFileStorageService implements FileStorageService {
                 }
             }
             if (size == 0) throw new StorageUploadException(StorageUploadException.Reason.EMPTY);
+            // Readers see only complete files, even if an upload is interrupted.
             Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);
             return new StoredFile(key, size, HexFormat.of().formatHex(digest.digest()));
         } catch (NoSuchAlgorithmException ex) {

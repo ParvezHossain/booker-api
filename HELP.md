@@ -2,7 +2,7 @@
 
 For the additive global Public Library, system-owner setup and workspace-shared
 progress, see [docs/public-library.md](docs/public-library.md). The catalogue
-contracts below refer to private workspaces; [api.md](api.md) contains all 35
+contracts below refer to private workspaces; [api.md](api.md) contains all 38
 business operations. No frontend implementation is part of this backend feature.
 
 This document describes the backend **as implemented in this repository**. Use it

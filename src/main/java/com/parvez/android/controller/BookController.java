@@ -23,6 +23,7 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import java.net.URI;
 import java.util.List;
 
+@ApiResponse(responseCode = "403", description = "A workspace account is required; Super Admin cannot access private books", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
 @RestController
 @RequestMapping("/api/books")
 @Validated
