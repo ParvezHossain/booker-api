@@ -46,7 +46,11 @@ emailed token when resetting. No workspace/user/role selector is needed.
    by a 43-character token. This is a case-sensitive token matching
    `[A-Za-z0-9_-]{43}`, not a short numeric OTP. The API never returns it.
    An optional “Open token copy page” email action opens a backend browser helper;
-   users can copy there and return to the Android token-entry screen. No native
+   users can copy there and return to the Android token-entry screen. The helper
+   shows a live countdown using the database expiry carried as `expiresAt` epoch
+   milliseconds in its URL fragment and formats the deadline in the browser’s local
+   timezone; this display does not replace backend validation. Email uses the backend
+   display timezone (default Asia/Dhaka). No native
    clipboard-link handler or new endpoint is required in the Android app.
    Default expiry is 30 minutes, configurable by the backend. Issuance is limited
    to once per account per 60 seconds; a newly issued token replaces the old one.

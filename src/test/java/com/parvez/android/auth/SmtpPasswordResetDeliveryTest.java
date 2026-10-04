@@ -9,14 +9,15 @@ import org.springframework.mail.MailSendException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 
-import java.time.Duration;
+import java.time.Instant;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class SmtpPasswordResetDeliveryTest {
-    final PasswordResetEmailTemplate template = new PasswordResetEmailTemplate();
+    static final Instant EXPIRES_AT = Instant.parse("2026-10-04T10:30:00Z");
+    final PasswordResetEmailTemplate template = new PasswordResetEmailTemplate("Asia/Dhaka");
 
     SmtpPasswordResetDeliveryTest() throws Exception {}
 
@@ -47,14 +48,15 @@ class SmtpPasswordResetDeliveryTest {
         var sender = sender(factory);
         var delivery = delivery(factory, "books@example.com", "", "");
         assertTrue(delivery.isConfigured());
-        assertTrue(delivery.send("owner@example.com", "secret-token", Duration.ofMinutes(30)));
+        assertTrue(delivery.send("owner@example.com", "secret-token", EXPIRES_AT));
         var parts = alternatives(sender);
         assertTrue(parts.getBodyPart(0).isMimeType("text/plain"));
         assertTrue(parts.getBodyPart(1).isMimeType("text/html"));
         String text = parts.getBodyPart(0).getContent().toString();
         String html = parts.getBodyPart(1).getContent().toString();
         assertTrue(text.contains("Reset token:\nsecret-token\n"));
-        assertTrue(text.contains("30 minutes"));
+        assertTrue(text.contains("04 Oct 2026, 04:30:00 PM (Asia/Dhaka +06:00)"));
+        assertFalse(html.contains("Expires in"));
         assertTrue(html.contains("secret-token"));
         assertTrue(html.contains("Single use"));
         assertFalse(html.contains("<script"));
@@ -68,24 +70,41 @@ class SmtpPasswordResetDeliveryTest {
         var delivery = delivery(factory, "books@example.com", "https://example.com/reset?client=android",
                 "https://api.example.com/password-reset-token");
         String token = "A".repeat(43);
-        assertTrue(delivery.send("owner@example.com", token, Duration.ofMinutes(30)));
+        assertTrue(delivery.send("owner@example.com", token, EXPIRES_AT));
         var parts = alternatives(sender);
         String text = parts.getBodyPart(0).getContent().toString();
         String html = parts.getBodyPart(1).getContent().toString();
         assertTrue(text.contains("https://example.com/reset?client=android&token=" + token));
         assertTrue(html.contains("https://example.com/reset?client=android&amp;token=" + token));
-        assertTrue(html.contains("href=\"https://api.example.com/password-reset-token#token=" + token + "\""));
+        assertTrue(html.contains("href=\"https://api.example.com/password-reset-token#token=" + token + "&amp;expiresAt=" + EXPIRES_AT.toEpochMilli() + "\""));
         assertTrue(html.contains("Open token copy page"));
         assertFalse(html.contains("password-reset-token?token="));
     }
 
-    @Test void tokenOnlyCopyEmailUsesConfiguredLifetimeAndEscapesDynamicValues() {
-        var content = template.render("<script>unsafe</script>", Duration.ofMinutes(15), "", "https://api.example.com/password-reset-token");
+    @Test void tokenOnlyCopyEmailUsesExactExpiryAndEscapesDynamicValues() {
+        var content = template.render("<script>unsafe</script>", EXPIRES_AT.plusSeconds(900), "", "https://api.example.com/password-reset-token");
         assertTrue(content.html().contains("&lt;script&gt;unsafe&lt;/script&gt;"));
         assertFalse(content.html().contains("<script>"));
-        assertTrue(content.html().contains("15 minutes"));
+        assertTrue(content.html().contains("04 Oct 2026, 04:45:00 PM (Asia/Dhaka +06:00)"));
+        assertTrue(content.text().contains("expiresAt=" + EXPIRES_AT.plusSeconds(900).toEpochMilli()));
         assertTrue(content.html().contains("#token=%3Cscript%3Eunsafe%3C%2Fscript%3E"));
         assertFalse(content.html().contains("{{"));
+    }
+
+    @Test void emailTimezoneHandlesDateRolloverAndRejectsInvalidConfiguration() throws Exception {
+        var content = template.render("secret-token", Instant.parse("2026-10-04T22:30:00Z"), "", "");
+        assertTrue(content.text().contains("05 Oct 2026, 04:30:00 AM (Asia/Dhaka +06:00)"));
+        assertFalse(content.html().contains("UTC"));
+        assertThrows(java.time.DateTimeException.class, () -> new PasswordResetEmailTemplate("invalid/timezone"));
+    }
+
+    @Test void configurableTimezoneHandlesDaylightSavingWithoutChangingExpiry() throws Exception {
+        var local = new PasswordResetEmailTemplate("America/New_York");
+        var summer = local.render("secret-token", Instant.parse("2026-07-04T10:30:00Z"), "", "https://api.example.com/password-reset-token");
+        var winter = local.render("secret-token", Instant.parse("2026-01-04T10:30:00Z"), "", "https://api.example.com/password-reset-token");
+        assertTrue(summer.text().contains("04 Jul 2026, 06:30:00 AM (America/New_York -04:00)"));
+        assertTrue(winter.text().contains("04 Jan 2026, 05:30:00 AM (America/New_York -05:00)"));
+        assertTrue(summer.text().contains("expiresAt=" + Instant.parse("2026-07-04T10:30:00Z").toEpochMilli()));
     }
 
     @Test void tokenEmailStillRequiresSenderAndSmtpHost() {
@@ -116,6 +135,6 @@ class SmtpPasswordResetDeliveryTest {
         var factory = new DefaultListableBeanFactory();
         var sender = sender(factory);
         doThrow(new MailSendException("offline")).when(sender).send(any(MimeMessage.class));
-        assertFalse(delivery(factory, "books@example.com", "", "").send("owner@example.com", "secret-token", Duration.ofMinutes(30)));
+        assertFalse(delivery(factory, "books@example.com", "", "").send("owner@example.com", "secret-token", EXPIRES_AT));
     }
 }

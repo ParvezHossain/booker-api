@@ -62,6 +62,9 @@ Configure these backend environment variables (also available in compose and `.e
   Adds an email action that opens the copy helper. Use HTTPS in production; HTTP
   localhost/private IPv4 LAN addresses are accepted for local development.
   The URL must have no credentials, query or fragment.
+- `PASSWORD_RESET_TIME_ZONE`: IANA timezone for email expiry display, default
+  `Asia/Dhaka`. Invalid identifiers fail startup. Email cannot automatically detect
+  each recipient’s device timezone. The browser copy helper uses the device timezone.
 - `PASSWORD_RESET_TTL`: ISO-8601 duration, default PT30M, positive and at most 24 hours.
 
 SMTP connections/read/write have five-second timeouts. Secrets stay on the backend. Password reset is unavailable until SMTP and sender are configured; signup/login/change-password continue to work. Real email delivery needs provider configuration and has not been verified with a live provider.
@@ -73,15 +76,28 @@ Android and Angular UI changes are not included. Swagger exposes all three opera
 ## Email presentation and clipboard helper
 
 Recovery emails are multipart UTF-8 HTML and plain text. The HTML includes Booker
-branding, a highlighted token, configured expiry, steps and security guidance.
-If configured, the copy action links to `PASSWORD_RESET_TOKEN_PAGE_URL#token=...`.
+branding, a highlighted token, its database expiry in the configured email timezone, steps and security guidance.
+Email clients do not reliably run live timers, so email shows an absolute deadline
+instead of a fixed “Expires in 30 minutes” message.
+If configured, the copy action links to
+`PASSWORD_RESET_TOKEN_PAGE_URL#token=...&expiresAt=<epoch-milliseconds>`.
 The backend hosts this page; no separate Angular/web app is needed. Email clients
 cannot reliably execute clipboard scripts, so copying happens after an explicit
 click on the browser page, with manual selection as a fallback.
 
 The fragment stays in the browser and is removed from history on load. The helper
-validates only token syntax, never sends it to the server or stores it, and never
-checks expiry or consumes it. No external assets or analytics are loaded. Responses
+validates token syntax and displays a live countdown from the expiry returned by
+PostgreSQL at issuance. Its absolute deadline is formatted in the browser’s local
+timezone and locale, with the timezone shown beside it. Opening it later does not
+restart the lifetime. It recalculates
+from the absolute deadline each second and when the tab becomes visible; at zero
+it shows “Expired” and disables the copy button. The display uses the browser clock
+and fragment metadata and is advisory: the reset API still enforces database expiry,
+replacement and single use. Timezone conversion changes presentation only; stored
+instants, fragment epoch milliseconds and countdown duration remain unchanged.
+The helper never sends the token to the server or stores
+it, and never queries token validity or consumes it. Old links without expiry
+metadata still allow copying with an “Expiry time unavailable” message. No external assets or analytics are loaded. Responses
 use no-store, no-referrer and a nonce-based restrictive CSP. On insecure LAN HTTP
 or denied clipboard access, the page offers selection and manual copy. Production
 must use HTTPS; HTTP local development does not protect against network tampering.

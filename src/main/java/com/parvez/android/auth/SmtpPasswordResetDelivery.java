@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 import jakarta.mail.MessagingException;
 
 import java.net.URI;
-import java.time.Duration;
+import java.time.Instant;
 
 /** SMTP adapter; sends a token directly or a link to an optional HTTPS reset page. */
 @Component
@@ -49,12 +49,12 @@ public class SmtpPasswordResetDelivery implements PasswordResetDelivery {
     }
 
     @Override
-    public boolean send(String email, String token, Duration lifetime) {
+    public boolean send(String email, String token, Instant expiresAt) {
         try {
             var sender = mail.getObject();
             var message = sender.createMimeMessage();
             var helper = new MimeMessageHelper(message, MimeMessageHelper.MULTIPART_MODE_MIXED, "UTF-8");
-            var content = template.render(token, lifetime, resetUrl, tokenPageUrl);
+            var content = template.render(token, expiresAt, resetUrl, tokenPageUrl);
             helper.setFrom(from);
             helper.setTo(email);
             helper.setSubject("Reset your Booker password");

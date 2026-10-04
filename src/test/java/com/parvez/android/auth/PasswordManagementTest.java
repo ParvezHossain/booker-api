@@ -25,7 +25,8 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppC
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@SpringBootTest(properties={"management.health.mail.enabled=false","app.password-reset.from=books@example.com", "app.password-reset.url="})
+@SpringBootTest(properties={"management.health.mail.enabled=false","app.password-reset.from=books@example.com", "app.password-reset.url=",
+        "app.password-reset.token-page-url=https://api.example.com/password-reset-token"})
 class PasswordManagementTest {
     @Autowired WorkspaceAccounts accounts;
     @Autowired TokenService tokens;
@@ -158,7 +159,11 @@ class PasswordManagementTest {
         var capture = org.mockito.ArgumentCaptor.forClass(MimeMessage.class);
         verify(mail,atLeastOnce()).send(capture.capture());
         var alternatives = (Multipart) ((Multipart) capture.getValue().getContent()).getBodyPart(0).getContent();
-        String token = alternatives.getBodyPart(0).getContent().toString().split("Reset token:\n")[1].split("\n")[0];
+        String text = alternatives.getBodyPart(0).getContent().toString();
+        String token = text.split("Reset token:\n")[1].split("\n")[0];
+        var expiresAt = jdbc.queryForObject("SELECT expires_at FROM password_reset_tokens WHERE email=?",
+                java.sql.Timestamp.class, email).toInstant();
+        assertTrue(text.contains("#token=" + token + "&expiresAt=" + expiresAt.toEpochMilli()));
         assertTrue(token.matches("[A-Za-z0-9_-]{43}"));
         return token;
     }

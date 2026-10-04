@@ -48,15 +48,17 @@ public class PasswordService {
         var users = jdbc.queryForList("SELECT email FROM workspace_users WHERE email = ? FOR UPDATE", String.class, email);
         if (users.isEmpty()) return;
         String token = OpaqueTokens.random();
-        int issued = jdbc.update("""
+        var issued = jdbc.query("""
                 INSERT INTO password_reset_tokens (email, token_hash, expires_at)
                 VALUES (?, ?, now() + (? * interval '1 second'))
                 ON CONFLICT (email) DO UPDATE SET token_hash = EXCLUDED.token_hash,
                     expires_at = EXCLUDED.expires_at, requested_at = now()
                 WHERE password_reset_tokens.requested_at <= now() - interval '60 seconds'
-                """, email, OpaqueTokens.sha256Hex(token), ttl.toSeconds());
-        if (issued == 0) return;
-        if (!delivery.send(email, token, ttl)) {
+                RETURNING expires_at
+                """, (rs, row) -> rs.getTimestamp("expires_at").toInstant(),
+                email, OpaqueTokens.sha256Hex(token), ttl.toSeconds());
+        if (issued.isEmpty()) return;
+        if (!delivery.send(email, token, issued.getFirst())) {
             // Keep the issuance timestamp for the cooldown, but make an undelivered token unusable.
             jdbc.update("UPDATE password_reset_tokens SET expires_at = now() WHERE email = ?", email);
         }

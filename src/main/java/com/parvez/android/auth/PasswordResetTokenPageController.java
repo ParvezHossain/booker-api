@@ -29,7 +29,7 @@ public class PasswordResetTokenPageController {
     @GetMapping(value = "/password-reset-token", produces = MediaType.TEXT_HTML_VALUE)
     @Operation(summary = "Open the password reset token copy page", security = {},
             description = "Public HTML helper. Reads #token in the browser and removes it from browser history. "
-                    + "Does not validate, consume or retrieve reset tokens. Copying requires a user action.")
+                    + "Displays an advisory countdown from fragment expiresAt epoch milliseconds. Does not query token validity, consume or retrieve reset tokens. Copying requires a user action.")
     @ApiResponse(responseCode = "200", description = "Token copy page", content = @Content(mediaType = "text/html"))
     public ResponseEntity<String> page() {
         String nonce = OpaqueTokens.random();

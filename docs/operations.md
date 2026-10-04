@@ -43,6 +43,7 @@ Docker excludes secret files, stored PDFs and local tooling from its build conte
 | `BOOK_REQUEST_EMAIL_FROM` | Request/decision sender; blank falls back to `PASSWORD_RESET_FROM`, then `SMTP_USERNAME`. Set explicitly if the SMTP username is not a provider-approved email address |
 | `PASSWORD_RESET_URL` | Optional; blank emails a copyable token. If set, HTTPS client landing page, no fragment; reset token appended as query parameter |
 | `PASSWORD_RESET_TOKEN_PAGE_URL` | Optional reachable URL of the backend `/password-reset-token` helper; adds an email copy action using `#token`. HTTPS required except localhost/private IPv4 LAN development; no credentials, query or fragment |
+| `PASSWORD_RESET_TIME_ZONE` | `Asia/Dhaka`; IANA timezone for email expiry display, validated at startup. Browser copy page uses the device timezone |
 | `PASSWORD_RESET_TTL` | `PT30M`; positive, at most 24 hours |
 | `BOOK_REQUEST_EMAIL_ENABLED` | true; pauses publisher/listener when false, leaving receipts pending |
 | `RABBITMQ_HOST`, `RABBITMQ_PORT` | localhost / 5672; Compose uses rabbitmq / 5672 |

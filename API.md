@@ -711,7 +711,7 @@ Content-Type: application/json
 
 **Business / implementation notes**
 
-Same 202 body for unknown/known emails and delivery failure. At most one issuance per account per minute; default expiry 30 minutes. Token is emailed, never returned. With `PASSWORD_RESET_URL` blank, the email contains a token to copy into Swagger or an Android reset form. With an HTTPS reset URL configured, the email contains a link with a `token` query parameter. Email includes UTF-8 HTML and plain-text alternatives. `PASSWORD_RESET_TOKEN_PAGE_URL` adds a link to the backend copy helper, with the token in a URL fragment (`#token=...`). SMTP and `PASSWORD_RESET_FROM` remain required. Cache-Control: no-store.
+Same 202 body for unknown/known emails and delivery failure. At most one issuance per account per minute; default expiry 30 minutes. Token is emailed, never returned. With `PASSWORD_RESET_URL` blank, the email contains a token to copy into Swagger or an Android reset form. With an HTTPS reset URL configured, the email contains a link with a `token` query parameter. Email includes UTF-8 HTML and plain-text alternatives. `PASSWORD_RESET_TOKEN_PAGE_URL` adds a link to the backend copy helper, with the token and its stored expiry in a URL fragment (`#token=...&expiresAt=<epoch-milliseconds>`). Email shows the expiry in `PASSWORD_RESET_TIME_ZONE` (default `Asia/Dhaka`); the copy helper displays the deadline in the browser’s local timezone and a live countdown. SMTP and `PASSWORD_RESET_FROM` remain required. Cache-Control: no-store.
 
 ### 6.7 Reset password
 
@@ -777,10 +777,15 @@ Public `GET /password-reset-token` returns **200**, `Content-Type: text/html;cha
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, a nonce-based restrictive
 Content-Security-Policy and `Permissions-Policy: clipboard-write=(self)`.
 It serves a browser helper, not a new token-retrieval or password-reset API.
-The browser reads `#token=<43-character-token>`, removes the fragment from history,
+The browser reads `#token=<43-character-token>&expiresAt=<epoch-milliseconds>`, removes the fragment from history,
 and copies the token only after a button click. Fragments are not sent to the backend;
-query tokens are not read or reflected. Missing/malformed fragments disable copying.
-The page never verifies expiry, consumes a token or changes a password. If clipboard
+query tokens are not read or reflected. Missing/malformed tokens disable copying.
+The page formats the absolute deadline in the browser’s local timezone and locale,
+including its timezone label. It counts down from the stored deadline, updates when a background
+tab becomes visible, and disables copying at zero. This display depends on the browser
+clock and is advisory; database expiry and single-use enforcement stay in the reset API.
+Old links with no usable expiry metadata still allow copying and show expiry as
+unavailable. The page never queries validity, consumes a token or changes a password. If clipboard
 access is unavailable, it offers selected text for manual copying. No account login
 is needed. The existing POST reset endpoint still performs all validation.
 
