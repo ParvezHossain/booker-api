@@ -41,7 +41,7 @@ job dashboards or production alerting. The LGTM Compose service is local tooling
 | --- | --- |
 | Signup/workspace | `WorkspaceController` is the HTTP adapter; `WorkspaceAccounts` provisions/loads principals |
 | Sessions | `TokenService` issues/rotates tokens and checks database credential versions |
-| Passwords | `PasswordService` manages tokens/revocation and configurable monthly successful-reset allowance; `PasswordResetDelivery` separates mail transport |
+| Passwords | `PasswordService` manages tokens/revocation and configurable monthly successful-reset allowance; `PasswordResetDelivery` persists encrypted recovery receipts; SMTP runs in a leased background worker |
 | Books | Private `BookService` and public `PublicBookService` share metadata mapping but retain distinct permissions/quotas |
 | Documents | `BookDocumentService` authorizes, validates and activates immutable document metadata |
 | Byte storage | `FileStorageService` streams bytes through opaque provider-generated keys |
@@ -67,6 +67,7 @@ bearer secrets and digests; passwords use salted PBKDF2 instead of SHA-256.
 | `reading_progress`, operations | Account/book primary key; account/operation retry identity; document/book foreign keys |
 | `public_reading_progress`, operations | Workspace/book primary key and workspace/operation retry identity |
 | `refresh_tokens`, `password_reset_tokens` | Hashed secrets with expiry; reset row unique per account; account credential version invalidates JWTs |
+| `password_reset_emails` | AES-GCM protected short-lived tokens, opaque receipt IDs, confirmed publication, retry/expiry and fenced lease finalization |
 | `password_reset_history` | Successful recovery audit keyed by identity; indexed account/time query enforces the UTC monthly allowance across replicas |
 | `google_drive_*` | Encrypted account connections, expiring hashed browser states and durable import jobs |
 | `book_events`, cursor | Workspace events allocated by a commit-ordered transactional counter |
@@ -137,12 +138,13 @@ server errors retain diagnostic context in access-controlled logs.
 ## Known limitations
 
 Lists and request history are unpaginated. SSE polling scales per connection and
-existing streams are not continuously reauthenticated. There is no event/receipt/
+existing streams are not continuously reauthenticated. There is no general event/receipt/
 version retention policy, general traffic rate limiter or object-store provider.
 Book-request submission has a PostgreSQL-backed shared monthly quota. LOCAL
-replicas need shared storage. Reset SMTP holds the account transaction; request/decision
-mail uses RabbitMQ with bounded retries, but SMTP still holds a receipt transaction.
-The publisher has a separate scheduler; remaining scheduled workers share the default
+replicas need shared storage. Recovery mail uses an encrypted outbox and separate
+RabbitMQ queue; SMTP runs outside database transactions with fenced lease completion.
+Request/decision mail has bounded retries, but SMTP still holds a receipt transaction.
+Each email publisher has a separate scheduler; remaining scheduled workers share the default
 scheduler, so long work can still delay other jobs. Sustained overload can grow the
 PostgreSQL outbox despite bounded broker queues. Import leases lack heartbeat/fencing. Public raw uploads have no private
 file/page/storage quota. Live Google/SMTP and client behaviors need separate checks.

@@ -26,11 +26,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest(properties={"management.health.mail.enabled=false","app.password-reset.from=books@example.com", "app.password-reset.url=",
-        "app.password-reset.token-page-url=https://api.example.com/password-reset-token", "app.password-reset.monthly-limit=3"})
+        "app.password-reset.token-page-url=https://api.example.com/password-reset-token", "app.password-reset.monthly-limit=3",
+        "app.password-reset.email.enabled=false", "app.password-reset.email.encryption-key=QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="})
 class PasswordManagementTest {
     @Autowired WorkspaceAccounts accounts;
     @Autowired TokenService tokens;
     @Autowired PasswordService passwords;
+    @Autowired PasswordResetEmailWorker emailWorker;
     @Autowired JdbcTemplate jdbc;
     @Autowired WebApplicationContext context;
     @MockitoBean JavaMailSender mail;
@@ -105,11 +107,16 @@ class PasswordManagementTest {
             assertNotEquals(results.get(0).get(),results.get(1).get());
         }
     }
-    @Test void mailFailureDoesNotRevealAccountOrLeaveToken() throws Exception {
+    @Test void asynchronousMailFailurePreservesTokenForDelayedRetry() throws Exception {
         doThrow(new org.springframework.mail.MailSendException("delivery failed")).when(mail).send(any(MimeMessage.class));
         mvc.perform(post("/api/auth/forgot-password").contentType("application/json").content("{\"email\":\""+email+"\"}"))
                 .andExpect(status().isAccepted());
-        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM password_reset_tokens WHERE email=? AND expires_at > now()",Integer.class,email));
+        verify(mail, never()).send(any(MimeMessage.class));
+        UUID receipt = jdbc.queryForObject("SELECT id FROM password_reset_emails WHERE email=?", UUID.class, email);
+        emailWorker.deliver(receipt);
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM password_reset_tokens WHERE email=? AND expires_at > now()",Integer.class,email));
+        assertEquals(1, jdbc.queryForObject("SELECT attempts FROM password_reset_emails WHERE id=?", Integer.class, receipt));
+        assertTrue(jdbc.queryForObject("SELECT available_at > clock_timestamp() AND lease_id IS NULL FROM password_reset_emails WHERE id=?", Boolean.class, receipt));
         assertEquals(0, resetCount(email));
     }
     @Test void superAdminCanChangePasswordWithBasicAuthentication() throws Exception {
@@ -123,10 +130,9 @@ class PasswordManagementTest {
         assertThrows(Exception.class, () -> tokens.login(admin,old));
     }
     @Test void missingEmailConfigurationIsUnavailableForEveryAccount() {
-        var factory = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+        var unavailable = mock(PasswordResetDelivery.class);
         var service = new PasswordService(jdbc, context.getBean(org.springframework.security.crypto.password.PasswordEncoder.class),
-                new SmtpPasswordResetDelivery(factory.getBeanProvider(JavaMailSender.class), "", "", "",
-                        context.getBean(PasswordResetEmailTemplate.class)), java.time.Duration.ofMinutes(30), 3);
+                unavailable, java.time.Duration.ofMinutes(30), 3);
         for (String account : List.of(email,"absent@example.com")) {
             var failure = assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> service.forgot(account));
             assertEquals(503,failure.getStatusCode().value());
@@ -283,6 +289,18 @@ class PasswordManagementTest {
         assertNotNull(tokens.login(email, fresh));
     }
 
+    @Test void rollbackOfForgotCommitsNeitherTokenNorEncryptedReceipt() {
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(
+                context.getBean(org.springframework.transaction.PlatformTransactionManager.class));
+        assertThrows(IllegalStateException.class, () -> transaction.executeWithoutResult(status -> {
+            passwords.forgot(email);
+            throw new IllegalStateException("Test-only rollback");
+        }));
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_reset_tokens WHERE email=?", Integer.class, email));
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_reset_emails WHERE email=?", Integer.class, email));
+        verifyNoInteractions(mail);
+    }
+
     private int resetCount(String account) {
         return jdbc.queryForObject("SELECT count(*) FROM password_reset_history WHERE email=?", Integer.class, account);
     }
@@ -295,10 +313,17 @@ class PasswordManagementTest {
         return requestToken(email);
     }
     private String requestToken(String recipient) throws Exception {
+        int previousSends = (int) mockingDetails(mail).getInvocations().stream().filter(call -> call.getMethod().getName().equals("send")).count();
         mvc.perform(post("/api/auth/forgot-password").contentType("application/json").content("{\"email\":\""+recipient.toUpperCase()+"\"}"))
                 .andExpect(status().isAccepted()).andExpect(header().string("Cache-Control","no-store"))
                 .andExpect(jsonPath("$.message").value("If the account exists, a password reset email will be sent."))
                 .andExpect(jsonPath("$.token").doesNotExist());
+        verify(mail, times(previousSends)).send(any(MimeMessage.class));
+        UUID receipt = jdbc.queryForObject("""
+                SELECT e.id FROM password_reset_emails e JOIN password_reset_tokens t
+                    ON t.email=e.email AND t.token_hash=e.token_hash WHERE e.email=?
+                """, UUID.class, recipient);
+        emailWorker.deliver(receipt);
         var capture = org.mockito.ArgumentCaptor.forClass(MimeMessage.class);
         verify(mail,atLeastOnce()).send(capture.capture());
         var alternatives = (Multipart) ((Multipart) capture.getValue().getContent()).getBodyPart(0).getContent();

@@ -708,17 +708,17 @@ Content-Type: application/json
 | Status | Condition |
 | --- | --- |
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
-| 503 | Password reset email is not configured. |
+| 503 | Password reset SMTP/sender or queued-token encryption key is not configured. |
 
 **Business / implementation notes**
 
-Same 202 body for unknown/known emails and delivery failure. At most one issuance per account per minute; default expiry 30 minutes. Token is emailed, never returned. With `PASSWORD_RESET_URL` blank, the email contains a token to copy into Swagger or an Android reset form. With an HTTPS reset URL configured, the email contains a link with a `token` query parameter. Email includes UTF-8 HTML and plain-text alternatives. `PASSWORD_RESET_TOKEN_PAGE_URL` adds a link to the backend copy helper, with the token and its stored expiry in a URL fragment (`#token=...&expiresAt=<epoch-milliseconds>`). Email shows the expiry in `PASSWORD_RESET_TIME_ZONE` (default `Asia/Dhaka`); the copy helper displays the deadline in the browser’s local timezone and a live countdown. SMTP and `PASSWORD_RESET_FROM` remain required. Cache-Control: no-store.
+Same 202 body for unknown/known emails. Eligible requests commit token and encrypted email receipt before returning, with no SMTP or RabbitMQ I/O on the request thread. Background broker/provider failures do not change acceptance; bounded delayed retries retain the original expiry and skip expired/replaced/consumed tokens. At most one issuance per account per minute; default expiry 30 minutes. Token is emailed, never returned. With `PASSWORD_RESET_URL` blank, the email contains a token to copy into Swagger or an Android reset form. With an HTTPS reset URL configured, the email contains a link with a `token` query parameter. Email includes UTF-8 HTML and plain-text alternatives. `PASSWORD_RESET_TOKEN_PAGE_URL` adds a link to the backend copy helper, with the token and its stored expiry in a URL fragment (`#token=...&expiresAt=<epoch-milliseconds>`). Email shows the expiry in `PASSWORD_RESET_TIME_ZONE` (default `Asia/Dhaka`); the copy helper displays the deadline in the browser’s local timezone and a live countdown. SMTP, `PASSWORD_RESET_FROM` and a dedicated `PASSWORD_RESET_EMAIL_ENCRYPTION_KEY` remain required. A paused `PASSWORD_RESET_EMAIL_ENABLED=false` stores receipts without background delivery. See [queue workflow](docs/password-reset-email-queue.md). Cache-Control: no-store.
 
 Accounts that have reached `PASSWORD_RESET_MONTHLY_LIMIT` successful resets in the
 current UTC calendar month (default 3 per account, including Super Admin) receive
 the same generic 202 without a new token or email. No 429 or allowance information
 is exposed by forgot-password. Requesting/resending email does not consume allowance;
-SMTP configuration errors still return 503 for all accounts.
+SMTP/sender or encryption-key configuration errors still return 503 for all accounts.
 
 ### 6.7 Reset password
 

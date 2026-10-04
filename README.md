@@ -86,7 +86,7 @@ and an exposed JobRunr dashboard are not established by that dependency.
 
 ```text
 src/main/java/com/parvez/android/   Controllers, services and feature packages
-src/main/resources/                Environment-backed properties and Flyway V1–V15
+src/main/resources/                Environment-backed properties and Flyway V1–V16
 src/test/java/                     Unit, MVC, database and real HTTP tests
 .mvn/wrapper/                      Maven wrapper distribution configuration
 .github/workflows/                 Build, test and Docker validation
@@ -215,6 +215,7 @@ through exported variables or your deployment secret manager.
 | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` | Optional initial provisioning pair |
 | `SMTP_HOST`, `PASSWORD_RESET_FROM`, `PASSWORD_RESET_URL` | Mail transport and sender; optional HTTPS reset page (blank URL emails a copyable token) |
 | `PASSWORD_RESET_MONTHLY_LIMIT` | 3 successful resets per account per UTC calendar month; positive integer |
+| `PASSWORD_RESET_EMAIL_ENCRYPTION_KEY`, `PASSWORD_RESET_EMAIL_ENABLED` | Dedicated stable 32-byte Base64 key; true enables background RabbitMQ delivery |
 | `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source defaults to `http://localhost:4318/v1/metrics`; Compose sets an empty value |
 
 Drive credentials, Picker configuration, remaining SMTP options and worker settings
@@ -367,8 +368,12 @@ submitted to reset-password returns 429 with `Retry-After` until the next UTC mo
 Persisted history and the account lock enforce this across restarts and replicas.
 V15 starts existing accounts at zero recorded resets and preserves pending tokens.
 See [password recovery workflow](docs/password-management.md#monthly-successful-reset-allowance).
-Missing reset configuration
-returns 503. Request decisions commit independently of successful email delivery
+Recovery requests commit an encrypted PostgreSQL receipt and return 202 before
+SMTP or RabbitMQ I/O. Configure a dedicated stable `PASSWORD_RESET_EMAIL_ENCRYPTION_KEY`
+(Base64, 32 random bytes); missing SMTP/sender/key returns 503. A separate bounded
+RabbitMQ queue delivers mail with delayed retries and skips expired/replaced tokens.
+SMTP runs outside database locks; token expiry begins at issuance and is never extended.
+See [asynchronous recovery workflow](docs/password-reset-email-queue.md). Request decisions commit independently of successful email delivery
 and use a durable PostgreSQL outbox plus RabbitMQ. New workspace book requests also enqueue
 an email to every provisioned Super Admin, using a professional HTML template
 and plain-text alternative with book, workspace and requester details. Submission
@@ -401,9 +406,9 @@ are in [operations](docs/operations.md).
 
 ## Database and upgrades
 
-Flyway owns the V1–V15 migration sequence; Hibernate validates the resulting schema.
+Flyway owns the V1–V16 migration sequence; Hibernate validates the resulting schema.
 Tables cover workspaces/accounts, private/public books, immutable documents,
-scoped progress and retry receipts, refresh/reset secrets and successful-reset history, Drive connections/jobs,
+scoped progress and retry receipts, refresh/reset secrets, successful-reset history and encrypted recovery receipts, Drive connections/jobs,
 notifications, library requests, email receipts and file cleanup receipts.
 
 Fresh historical seed books belong to a reserved legacy workspace and have no

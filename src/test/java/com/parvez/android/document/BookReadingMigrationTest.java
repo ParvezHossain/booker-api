@@ -110,6 +110,29 @@ class BookReadingMigrationTest {
         });
     }
 
+    @Test void resetEmailOutboxUpgradePreservesPopulatedTokensAndHistory() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "15");
+            var jdbc = schema.jdbc();
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,role) VALUES ('queue-upgrade@example.com','test-only','SUPER_ADMIN')");
+            jdbc.update("INSERT INTO password_reset_tokens(email,token_hash,expires_at) VALUES ('queue-upgrade@example.com',?,now()+interval '30 minutes')", "a".repeat(64));
+            jdbc.update("INSERT INTO password_reset_history(email,reset_at) VALUES ('queue-upgrade@example.com',clock_timestamp())");
+            var tokens = jdbc.queryForList("SELECT * FROM password_reset_tokens");
+            var history = jdbc.queryForList("SELECT * FROM password_reset_history");
+            migrate(schema.name(), null);
+            assertEquals(tokens, jdbc.queryForList("SELECT * FROM password_reset_tokens"));
+            assertEquals(history, jdbc.queryForList("SELECT * FROM password_reset_history"));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_reset_emails", Integer.class));
+            UUID id = UUID.randomUUID();
+            jdbc.update("INSERT INTO password_reset_emails(id,email,token_hash,encrypted_token,expires_at) VALUES (?,'queue-upgrade@example.com',?,'test-only-ciphertext',now()+interval '30 minutes')", id, "a".repeat(64));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("UPDATE password_reset_emails SET attempts=-1 WHERE id=?", id));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("UPDATE password_reset_emails SET lease_id=? WHERE id=?", UUID.randomUUID(), id));
+            jdbc.update("DELETE FROM workspace_users WHERE email='queue-upgrade@example.com'");
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_reset_emails", Integer.class));
+            assertEquals(0, flyway(schema.name(), null).migrate().migrationsExecuted);
+        });
+    }
+
     @Test void requestEmailUpgradePreservesQueuedDecisionsAndAllowsIndependentAdminReceipts() throws Exception {
         inSchema(schema -> {
             migrate(schema.name(), "12");

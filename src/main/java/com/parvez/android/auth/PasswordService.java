@@ -70,10 +70,7 @@ public class PasswordService {
                 """, (rs, row) -> rs.getTimestamp("expires_at").toInstant(),
                 email, OpaqueTokens.sha256Hex(token), ttl.toSeconds());
         if (issued.isEmpty()) return;
-        if (!delivery.send(email, token, issued.getFirst())) {
-            // Keep the issuance timestamp for the cooldown, but make an undelivered token unusable.
-            jdbc.update("UPDATE password_reset_tokens SET expires_at = now() WHERE email = ?", email);
-        }
+        delivery.enqueue(email, token, issued.getFirst());
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)

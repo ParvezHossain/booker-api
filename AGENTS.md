@@ -18,6 +18,7 @@ purpose of changes to existing classes before modifying them.
 | `drive` | Browser-bound OAuth, protected credentials and durable import worker |
 | `notification` | Workspace-scoped durable events and SSE delivery |
 | `library` email queue | Transactional outbox, confirmed bounded RabbitMQ publication, sequential SMTP delivery and delayed retries |
+| `auth` recovery email queue | Encrypted short-lived outbox, opaque RabbitMQ receipt IDs, lease ownership and SMTP outside database locks |
 | `config`, `exception`, `security` | Security policy, OpenAPI, safe errors and token helpers |
 
 Keep controllers focused on HTTP concerns. Use constructor injection and immutable
@@ -93,6 +94,14 @@ single-active-consumer, prefetch/concurrency 1 and bounded queues. Acknowledge o
 after database delivery/retry state commits. Never replace outbox persistence with
 a direct publish inside the request transaction. Preserve delayed retries and failed
 receipt recovery; avoid immediate requeue loops or unbounded publisher batches.
+
+Password recovery commits its token digest and encrypted email receipt atomically,
+with no SMTP or RabbitMQ I/O on the request thread. Keep the dedicated stable AES-GCM
+key, account/receipt metadata binding, original expiry and stale-token checks. Only
+opaque UUIDs go to the separate bounded recovery queue. SMTP runs outside transactions;
+claim/finalization use short transactions with lease ownership checks. Never let an
+old worker restore a replaced token or finalize a different lease. Acknowledge after
+completion/retry state commits; preserve delayed retries, parking and expiry cleanup.
 
 ## Database and configuration
 

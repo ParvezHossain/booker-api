@@ -16,7 +16,7 @@ import java.time.Instant;
 
 /** SMTP adapter; sends a token directly or a link to an optional HTTPS reset page. */
 @Component
-public class SmtpPasswordResetDelivery implements PasswordResetDelivery {
+public class SmtpPasswordResetDelivery {
     private static final Logger log = LoggerFactory.getLogger(SmtpPasswordResetDelivery.class);
     private final ObjectProvider<JavaMailSender> mail;
     private final String from;
@@ -40,7 +40,6 @@ public class SmtpPasswordResetDelivery implements PasswordResetDelivery {
         if (!tokenPageUrl.isBlank()) validateTokenPageUrl(tokenPageUrl);
     }
 
-    @Override
     public boolean isConfigured() {
         JavaMailSender sender = mail.getIfAvailable();
         return sender != null && !from.isBlank()
@@ -48,7 +47,6 @@ public class SmtpPasswordResetDelivery implements PasswordResetDelivery {
                     || (smtp.getHost() != null && !smtp.getHost().isBlank()));
     }
 
-    @Override
     public boolean send(String email, String token, Instant expiresAt) {
         try {
             var sender = mail.getObject();

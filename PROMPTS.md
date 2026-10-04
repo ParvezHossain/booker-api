@@ -270,15 +270,16 @@ checks run locally and in CI without exposing secrets or modifying files unexpec
 
 ### P1 — Reliable mail and import leases
 
-**Objective and limitation:** Reset SMTP runs inside an account transaction and can reveal timing
-differences; request/decision mail now uses RabbitMQ, bounded publishing, delayed
-retries and parked failures, but SMTP still holds a receipt transaction. Drive
-leases are 15 minutes without a heartbeat/fencing token, so a slow worker may overlap a reclaim.
+**Objective and limitation:** Recovery email has encrypted short-lived outbox receipts,
+bounded confirmed RabbitMQ publication, delayed retries and fenced lease completion;
+SMTP runs outside database transactions. Request/decision mail uses RabbitMQ and
+bounded retries, but SMTP still holds a receipt transaction. Drive leases are 15
+minutes without a heartbeat/fencing token, so a slow worker may overlap a reclaim.
 
-**Requirements:** Design hashed reset state plus encrypted short-lived delivery receipts before
-moving reset mail to an outbox. Preserve implemented request-email retry/quarantine
-behavior and evaluate moving SMTP outside long database transactions with safe leases. Add import lease ownership/heartbeat and conditional terminal updates without
-weakening upload idempotency. The email publisher scheduler is already separate;
+**Requirements:** Preserve recovery expiry, stale-token suppression, encryption and
+lease ownership. Evaluate moving request/decision SMTP outside long transactions
+using similarly safe leases. Add import ownership/heartbeat and conditional terminal
+updates without weakening upload idempotency. Email publisher schedulers are separate;
 review remaining scheduler contention and add production queue/backlog alerts.
 
 **Acceptance/tests:** SMTP failure does not block healthy later mail, old reset delivery cannot

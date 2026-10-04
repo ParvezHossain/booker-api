@@ -9,8 +9,9 @@ This guide owns broker topology, delivery limits and recovery. The
 RabbitMQ carries Super Admin submission alerts and requester decision emails.
 Request submission/review still commits synchronously to PostgreSQL and returns
 the existing response; SMTP and broker availability do not determine HTTP success.
-PDF acceptance, Google imports, SSE events and password-reset email are not moved
-to RabbitMQ. This bounds email processing, not incoming HTTP/database traffic;
+Password recovery uses its own encrypted outbox and separate RabbitMQ queue; see
+[the recovery workflow](password-reset-email-queue.md). PDF acceptance, Google imports
+and SSE events use their existing workflows. This bounds email processing, not incoming HTTP/database traffic;
 book-request submission also has a shared ten-request UTC monthly quota. Gateway
 burst limits remain necessary for invalid/duplicate traffic and other routes.
 
@@ -89,11 +90,12 @@ policy. Provider throttling may require longer configured delays.
 
 | Variable | Default / purpose |
 | --- | --- |
-| `BOOK_REQUEST_EMAIL_ENABLED` | true; false pauses publisher/listener and disables Rabbit health; receipts remain pending |
+| `BOOK_REQUEST_EMAIL_ENABLED` | true; false pauses publisher/listener; receipts remain pending |
 | `RABBITMQ_HOST`, `RABBITMQ_PORT` | 127.0.0.1 / 5672 in source mode; Compose fixes rabbitmq / 5672 |
 | `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD` | booker / no usable default password; Compose requires a nonempty password |
 | `RABBITMQ_VHOST` | `/`; isolate environments with distinct vhosts |
 | `RABBITMQ_SSL_ENABLED` | false locally; use true and the broker TLS port for production, with trusted certificates |
+| `RABBITMQ_HEALTH_ENABLED` | true; broker health is independent of both email pause flags |
 | Compose `rabbitmq.mem_limit`, `rabbitmq.cpus` | Container limits: 512m / 1.0; customize through a Compose override for production capacity |
 | `BOOK_REQUEST_EMAIL_QUEUE` | booker.request-emails; all replicas in one deployment must share it |
 | `BOOK_REQUEST_EMAIL_POLL_MILLIS` | 1000; fixed delay after each bounded publisher pass |
@@ -180,7 +182,7 @@ stale-receipt recovery. Unit tests cover bounded publishing, broker failure and
 confirmation behavior; migration tests preserve pending V13 receipts.
 
 CI provides PostgreSQL 18 and RabbitMQ 4.2. General backend contexts set
-`BOOK_REQUEST_EMAIL_ENABLED=false`; the broker integration test explicitly enables
+`BOOK_REQUEST_EMAIL_ENABLED=false` and `PASSWORD_RESET_EMAIL_ENABLED=false`; the broker integration test explicitly enables
 the feature. No RabbitMQ tests are skipped to obtain a green build. Test databases
 and brokers must be disposable; live SMTP, production cluster failover and actual
 peak throughput still require deployment-specific verification.

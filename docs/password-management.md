@@ -1,6 +1,6 @@
 # Password change and recovery
 
-The backend supports workspace owners and Super Admin accounts using the existing PBKDF2 encoder. `PasswordService` manages the token lifecycle and monthly reset allowance through the `PasswordResetDelivery` interface; `SmtpPasswordResetDelivery` handles SMTP and message formatting. Flyway V11 adds an account `credential_version` and one reset-token row per email. V15 adds successful recovery history; earlier migrations are unchanged.
+The backend supports workspace owners and Super Admin accounts using the existing PBKDF2 encoder. `PasswordService` manages the token lifecycle and monthly reset allowance; `QueuedPasswordResetDelivery` implements durable acceptance through `PasswordResetDelivery`. A RabbitMQ consumer calls `SmtpPasswordResetDelivery` for background SMTP and message formatting. Flyway V11 adds an account `credential_version` and one reset-token row per email. V15 adds successful recovery history; V16 adds the encrypted reset-email outbox. Earlier migrations are unchanged.
 
 ## APIs
 
@@ -14,13 +14,13 @@ All requests use JSON and all successful responses use `Cache-Control: no-store`
 
 New passwords must contain 12–64 characters and cannot be blank. Current password is required, at most 64 characters. Emails are normalized to lowercase and limited to 254 characters. Tokens are 43 URL-safe characters. Do not send an email, user ID, role or workspace ID to select the account for change/reset.
 
-Errors use the existing ApiError schema: 400 invalid input, incorrect current password, or invalid/expired/used reset token; 401 unauthenticated/revoked credentials for password change; 429 valid reset token but monthly allowance exhausted, with `Retry-After` seconds until the next UTC month; 503 reset email not configured. SMTP delivery failures return the same 202 as unknown accounts and invalidate the newly issued token; server logs only a generic delivery warning. Unknown accounts, requests within the cooldown and accounts at the monthly limit also return 202 without sending email. This avoids account disclosure through response bodies/statuses; synchronous SMTP can still cause timing differences.
+Errors use the existing ApiError schema: 400 invalid input, incorrect current password, or invalid/expired/used reset token; 401 unauthenticated/revoked credentials for password change; 429 valid reset token but monthly allowance exhausted, with `Retry-After` seconds until the next UTC month; 503 SMTP/sender or queued-token encryption key not configured. Eligible requests return 202 after token/outbox commit; SMTP and broker failures happen in the background, retaining the original token expiry for bounded retries. Unknown accounts, requests within the cooldown and accounts at the monthly limit also return 202 without sending email. This avoids account disclosure through response bodies/statuses; database work can still cause timing differences, but HTTP no longer waits for SMTP or broker I/O.
 
 ## Reset flow
 
-1. Submit the email to forgot-password.
+1. Submit the email to forgot-password. Eligible requests commit token and encrypted email receipt atomically, then return generic 202 without waiting for SMTP or RabbitMQ. The background publisher/consumer delivers the email; acceptance does not prove delivery.
 2. With `PASSWORD_RESET_URL` blank, the email contains a 43-character token to copy into Swagger or an Android reset form. No web app is required. With an HTTPS reset URL configured, the email contains a link with a `token` query parameter instead. The client collects a new password and POSTs token/newPassword to reset-password. This backend does not provide a reset screen.
-3. Token has 256 random bits; only its SHA-256 digest is stored. Default expiry is 30 minutes. A new email after the 60-second per-account cooldown replaces the earlier token.
+3. Token has 256 random bits; the authentication table stores only its SHA-256 digest and the short-lived outbox stores an AES-GCM encrypted token for delivery. Default expiry is 30 minutes from issuance; queue waits and retries never extend it. A new email after the 60-second per-account cooldown replaces the earlier token.
 4. Reset validates and consumes the token, checks the monthly allowance, changes the PBKDF2 hash, increments credential version, removes every refresh/reset token and inserts successful recovery history in one transaction. A quota rejection rolls everything back. Change-password revokes sessions after checking the current password but does not consume recovery allowance. Login/refresh and password changes lock the same account row to prevent concurrent issuance with stale credentials.
 5. All prior access JWTs fail immediately on subsequent authentication; older JWTs with no version claim are treated as version zero until the first password change. Log in again with the new password. Normal logout behavior remains unchanged.
 
@@ -82,8 +82,10 @@ Leave `PASSWORD_RESET_URL=` blank in `.env`, configure SMTP and
 
 The existing 256-bit token, 30-minute default expiry, single-use checks and session
 revocation apply in both delivery modes. This is a long copyable token, not a
-short numeric OTP. SMTP is synchronous with no automatic reset-email retry; users
-can request another email after the cooldown if delivery fails.
+short numeric OTP. SMTP runs in a background RabbitMQ consumer, outside account
+transactions. Failed sends receive bounded delayed retries until expiry/parking;
+users can request a fresh email after the cooldown while allowance remains.
+See [the full queue workflow and recovery guide](password-reset-email-queue.md).
 Android screens are requirements for the separately maintained client, not an
 implemented feature of this backend.
 
@@ -105,8 +107,14 @@ Configure these backend environment variables (also available in compose and `.e
 - `PASSWORD_RESET_TTL`: ISO-8601 duration, default PT30M, positive and at most 24 hours.
 - `PASSWORD_RESET_MONTHLY_LIMIT`: positive integer, default 3 successful resets per
   account per UTC calendar month. Authenticated password changes are excluded.
+- `PASSWORD_RESET_EMAIL_ENCRYPTION_KEY`: a dedicated Base64-encoded 32-byte key;
+  keep stable across replicas/restarts and separate from JWT/Drive keys. Blank makes
+  recovery unavailable; malformed nonblank values fail startup.
+- `PASSWORD_RESET_EMAIL_ENABLED`: true; false pauses background delivery while
+  accepted receipts remain pending. Queue/retry/lease settings are in the
+  [queue configuration reference](password-reset-email-queue.md#configuration).
 
-SMTP connections/read/write have five-second timeouts. Secrets stay on the backend. Password reset is unavailable until SMTP and sender are configured; signup/login/change-password continue to work. Real email delivery needs provider configuration and has not been verified with a live provider.
+SMTP connections/read/write have five-second timeouts. Secrets stay on the backend. Password reset is unavailable until SMTP, sender and queued-token encryption key are configured; signup/login/change-password continue to work. Real email delivery needs provider configuration and has not been verified with a live provider.
 
 Apply request rate limits at the reverse proxy for login/change/forgot/reset, particularly unknown-email traffic and repeated invalid reset attempts; the built-in account cooldown limits reset email issuance, not global traffic. Do not log reset URL query strings. Serve the reset page without third-party scripts and with a restrictive Referrer-Policy, and remove the token from browser history after capturing it. Periodically purge expired reset rows where requested_at is older than the cooldown; retaining expired rows is safe and each account has at most one.
 
@@ -155,6 +163,6 @@ generic unknown-account/quota responses, SMTP failure, missing configuration,
 monthly exhaustion, account isolation, rollback and configurable limits.
 `PasswordResetQuotaTest` covers startup validation, post-lock year rollover and
 fractional `Retry-After` rounding; migration tests preserve populated V14 data.
-`SmtpPasswordResetDeliveryTest` covers token-only and link email formatting and URL/configuration rules. Integration tests exercise token-only email, reset, expiry, replay, cooldown and session revocation with no reset URL.
+`PasswordResetEmailRabbitIntegrationTest` covers background delivery, retries, stale-token suppression, leases and broker failures with disposable infrastructure and mocked SMTP. `SmtpPasswordResetDeliveryTest` covers token-only and link email formatting and URL/configuration rules. Integration tests exercise token-only email, reset, expiry, replay, cooldown and session revocation with no reset URL.
 Run the suite using [the disposable database setup](operations.md#testing).
 Live SMTP delivery and client reset screens require separate verification.

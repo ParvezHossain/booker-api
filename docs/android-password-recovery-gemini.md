@@ -38,9 +38,10 @@ emailed token when resetting. No workspace/user/role selector is needed.
 
    Email must be nonblank, valid email syntax and at most 254 characters.
    The backend normalizes it to lowercase. Invalid input returns 400;
-   unconfigured SMTP/sender returns 503. Unknown accounts, requests within the
-   cooldown, exhausted monthly reset allowance and SMTP failures all receive the
-   same generic 202 response. No email is issued at monthly exhaustion.
+   unconfigured SMTP/sender/queued-token encryption key returns 503. Unknown accounts, requests within the
+   cooldown and exhausted monthly reset allowance receive the same generic 202
+   response. Eligible requests persist an encrypted email receipt and return before
+   SMTP or RabbitMQ I/O; later broker/provider failures do not change this response. No email is issued at monthly exhaustion.
    A 202 response neither proves account existence nor guarantees email delivery.
 
 2. With backend `PASSWORD_RESET_URL` blank, email contains `Reset token:` followed
@@ -55,7 +56,7 @@ emailed token when resetting. No workspace/user/role selector is needed.
    clipboard-link handler or new endpoint is required in the Android app.
    Default expiry is 30 minutes, configurable by the backend. Issuance is limited
    to once per account per 60 seconds; a newly issued token replaces the old one.
-   SMTP failures have no automatic email retry. If an HTTPS reset URL is configured
+   Background SMTP failures have bounded delayed retries without extending token expiry. If an HTTPS reset URL is configured
    later, the email contains a link whose `token` query parameter has the same value.
 
 3. Public `POST /api/auth/reset-password`, JSON:
@@ -124,7 +125,7 @@ proxy responses. Preserve the API paths and JSON names exactly. Avoid duplicatin
 Reuse the configured backend base URL. For a physical device, the current local
 backend origin is `http://192.168.0.122:8080`; keep it configurable and allow any
 needed cleartext exception only in the debug configuration. Release uses HTTPS.
-SMTP credentials, JWT secrets and all backend `.env` settings stay on the backend.
+SMTP/RabbitMQ credentials, queued-token encryption key, JWT secrets and all backend `.env` settings stay on the backend.
 The Android app sends no email and needs no `PASSWORD_RESET_URL` setting.
 
 Implement token entry now. Preserve any verified existing HTTPS app-link support,

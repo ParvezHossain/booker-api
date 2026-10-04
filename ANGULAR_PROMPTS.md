@@ -71,7 +71,7 @@ Test concurrent 401s, refresh failure, logout failure/local clearing, no bearer 
 
 **Requirements and verification:**
 
-Read API.md sections 6.5–6.7. Implement authenticated change-password, public forgot-password and emailed-link reset-password pages using exact documented request fields and constraints. Show the generic forgot-password response without exposing account existence. Handle 204 without JSON parsing and expired/used tokens safely.
+Read API.md sections 6.5–6.7. Implement authenticated change-password, public forgot-password and emailed-link reset-password pages using exact documented request fields and constraints. Show the generic forgot-password response without exposing account existence. Acceptance commits an encrypted receipt and returns before SMTP/RabbitMQ; delivery has bounded retries without extending expiry. A 202 does not confirm email delivery; missing SMTP/sender/encryption configuration returns 503. Handle 204 without JSON parsing and expired/used tokens safely.
 
 Handle reset 429 for the per-account successful-reset limit (default three per UTC
 calendar month, configured by the backend). Show the backend message and exposed

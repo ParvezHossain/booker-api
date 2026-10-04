@@ -219,7 +219,9 @@ request. Ambiguous review responses require status reconciliation before a retry
 acceptance does not have the upload idempotency contract.
 
 Add authenticated change-password and public forgot/reset flows using API.md.
-Handle generic 202 without account disclosure. Support pasting the 43-character
+Handle generic 202 without account disclosure; eligible requests persist email then
+return before SMTP/RabbitMQ. Background retries do not extend expiry, and 202 does
+not prove delivery. Missing SMTP/sender/queued-token encryption key returns 503. Support pasting the 43-character
 emailed token when PASSWORD_RESET_URL is blank; an HTTPS app link is optional.
 Submit {token,newPassword}, then clear old sessions after successful change/reset.
 Handle reset 429 as a per-account successful-reset quota (default three per UTC

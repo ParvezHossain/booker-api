@@ -14,7 +14,8 @@ remain consistent.
 | [Public library](docs/public-library.md) | Global catalogue, Super Admin and workspace-shared reading |
 | [RabbitMQ email delivery](docs/request-email-queue.md) | Bounded queue, retries, quarantine and recovery |
 | [Book requests](docs/public-library-requests.md) | Review transactions, notifications and email receipts |
-| [Password management](docs/password-management.md) | Reset tokens, revocation, SMTP and security constraints |
+| [Password management](docs/password-management.md) | Reset tokens, monthly allowance, revocation and security constraints |
+| [Recovery email queue](docs/password-reset-email-queue.md) | Asynchronous recovery, encryption, RabbitMQ retries and lease recovery |
 | [Notifications](docs/book-notifications.md) | SSE framing, replay, cursor ordering and operations |
 | [Engineering backlog](PROMPTS.md) | Proposed improvements with acceptance criteria |
 | [Android specification](ANDROID_PROMPTS.md) | Client transport, durable offline state, reader and integration requirements |

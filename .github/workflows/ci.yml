@@ -50,6 +50,7 @@ jobs:
       BOOK_STORAGE_DIRECTORY: ${{ runner.temp }}/booker-ci-files
       MANAGEMENT_OTLP_METRICS_EXPORT_URL: ''
       BOOK_REQUEST_EMAIL_ENABLED: 'false'
+      PASSWORD_RESET_EMAIL_ENABLED: 'false'
       RABBITMQ_HOST: localhost
       RABBITMQ_PORT: '5672'
       RABBITMQ_USERNAME: booker_test

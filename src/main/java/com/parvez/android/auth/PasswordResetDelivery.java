@@ -2,10 +2,10 @@ package com.parvez.android.auth;
 
 import java.time.Instant;
 
-/** Delivery boundary: password recovery owns token lifecycle, providers own transport and message formatting. */
+/** Durable acceptance boundary; SMTP and RabbitMQ publication happen after request commit. */
 public interface PasswordResetDelivery {
     boolean isConfigured();
 
-    /** True when the provider accepts the email; false on delivery failure, without exposing secrets. */
-    boolean send(String email, String token, Instant expiresAt);
+    /** Persist the encrypted email receipt in the token issuance transaction. */
+    void enqueue(String email, String token, Instant expiresAt);
 }
