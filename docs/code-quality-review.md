@@ -40,7 +40,8 @@ job dashboards or production alerting. The LGTM Compose service is local tooling
 | Area | Main boundary |
 | --- | --- |
 | Signup/workspace | `WorkspaceController` is the HTTP adapter; `WorkspaceAccounts` provisions/loads principals |
-| Sessions | `TokenService` issues/rotates tokens and checks database credential versions |
+| Sessions | `TokenService` issues/rotates tokens, checks database credential versions and atomically records successful login context |
+| Security history | `AuthHistoryService` authorizes workspace/Super Admin cursor reads before lookup and returns explicit no-store DTO pages |
 | Passwords | `PasswordService` manages tokens/revocation and configurable monthly successful-reset allowance; `PasswordResetDelivery` persists encrypted recovery receipts; SMTP runs in a leased background worker |
 | Books | Private `BookService` and public `PublicBookService` share metadata mapping but retain distinct permissions/quotas |
 | Documents | `BookDocumentService` authorizes, validates and activates immutable document metadata |
@@ -68,6 +69,8 @@ bearer secrets and digests; passwords use salted PBKDF2 instead of SHA-256.
 | `public_reading_progress`, operations | Workspace/book primary key and workspace/operation retry identity |
 | `refresh_tokens`, `password_reset_tokens` | Hashed secrets with expiry; reset row unique per account; account credential version invalidates JWTs |
 | `password_reset_emails` | AES-GCM protected short-lived tokens, opaque receipt IDs, confirmed publication, retry/expiry and fenced lease finalization |
+| `login_history`, `password_change_history` | Account/workspace/time/IP/browser/device/User-Agent audit; indexed cursor reads; workspace scope and Super Admin global access |
+| `password_change_emails` | Leased confirmation outbox whose completed receipt deletion preserves audit |
 | `password_reset_history` | Successful recovery audit keyed by identity; indexed account/time query enforces the UTC monthly allowance across replicas |
 | `google_drive_*` | Encrypted account connections, expiring hashed browser states and durable import jobs |
 | `book_events`, cursor | Workspace events allocated by a commit-ordered transactional counter |
@@ -137,7 +140,8 @@ server errors retain diagnostic context in access-controlled logs.
 
 ## Known limitations
 
-Lists and request history are unpaginated. SSE polling scales per connection and
+Catalogue lists and book-request history are unpaginated; account security history
+uses bounded cursor pages. SSE polling scales per connection and
 existing streams are not continuously reauthenticated. There is no general event/receipt/
 version retention policy, general traffic rate limiter or object-store provider.
 Book-request submission has a PostgreSQL-backed shared monthly quota. LOCAL
@@ -154,7 +158,7 @@ Prioritized requirements and acceptance tests are in [PROMPTS.md](../PROMPTS.md)
 
 ## Verification expectations
 
-`OpenApiCoverageTest` checks all 43 business operations, generated success/error
+`OpenApiCoverageTest` checks all 47 business operations, generated success/error
 schemas, auth visibility, PDF Range/binary/HEAD and both progress 409 shapes. It also
 compares `API.md`'s inventory with registered application routes and public health.
 The fixed `/tmp` OpenAPI export is removed from test execution; clients can download

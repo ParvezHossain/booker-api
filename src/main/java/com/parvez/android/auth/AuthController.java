@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -31,12 +32,15 @@ public class AuthController {
     @Operation(summary = "Log in with account credentials", security = {},
             description = "Public endpoint for workspace owners and Super Admin. Email is normalized to lowercase. "
                     + "Returns Bearer access and refresh tokens with lifetimes in seconds. Responses are never cached; "
-                    + "invalid passwords and unknown emails return the same 401.")
+                    + "invalid passwords and unknown emails return the same 401. Successful token issuance atomically records "
+                    + "account/workspace, database time, connection IP and bounded optional User-Agent with inferred browser/device. "
+                    + "Failed logins, refreshes and ordinary Basic-authenticated requests do not create login history. "
+                    + "History is available to the owning workspace and Super Admin through the audit APIs.")
     @ApiResponse(responseCode = "200", description = "Authenticated; store tokens securely",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = TokenService.Tokens.class)))
     @PostMapping("/login")
-    public ResponseEntity<TokenService.Tokens> login(@Valid @RequestBody Login request) {
-        return response(tokens.login(request.email(), request.password()));
+    public ResponseEntity<TokenService.Tokens> login(@Valid @RequestBody Login request, HttpServletRequest servletRequest) {
+        return response(tokens.login(request.email(), request.password(), PasswordChangeContext.from(servletRequest)));
     }
 
     @Operation(summary = "Rotate a refresh token", security = {},

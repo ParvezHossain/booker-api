@@ -62,7 +62,7 @@ class OpenApiCoverageTest {
                 }
             }
         }
-        assertEquals(43, operations, "Update the client inventory when adding an API");
+        assertEquals(47, operations, "Update the client inventory when adding an API");
     }
 
     @Test void markdownInventoryMatchesApplicationRoutesAndHealth() throws Exception {
@@ -107,6 +107,31 @@ class OpenApiCoverageTest {
         assertTrue(schemas.path("LoginRequest").path("properties").path("password").path("writeOnly").asBoolean());
         assertTrue(schemas.path("ChangePasswordRequest").path("properties").path("newPassword").path("writeOnly").asBoolean());
         assertTrue(schemas.path("ResetPasswordRequest").path("properties").path("token").path("writeOnly").asBoolean());
+    }
+
+    @Test void securityHistoryDocumentsBoundedPagesAndAuthentication() {
+        for (String scope : List.of("workspace", "admin")) {
+            for (String history : List.of("login-history", "password-change-history")) {
+                var operation = specification.path("paths").path("/api/" + scope + "/" + history).path("get");
+                assertFalse(operation.path("security").isEmpty());
+                assertTrue(operation.path("responses").has("200"));
+                assertTrue(operation.path("responses").has("400"));
+                assertTrue(operation.path("responses").has("403"));
+                var parameters = operation.path("parameters");
+                boolean limit = false, cursor = false, workspace = false;
+                for (var parameter : parameters) {
+                    if ("limit".equals(parameter.path("name").asText())) {
+                        limit = true;
+                        assertEquals(1, parameter.path("schema").path("minimum").asInt());
+                        assertEquals(100, parameter.path("schema").path("maximum").asInt());
+                    }
+                    if ("cursor".equals(parameter.path("name").asText())) cursor = true;
+                    if ("workspaceId".equals(parameter.path("name").asText())) workspace = true;
+                }
+                assertTrue(limit && cursor);
+                assertEquals(scope.equals("admin"), workspace);
+            }
+        }
     }
 
     @Test void pdfRoutesDescribeBinaryContentRangesAndBodylessHead() {

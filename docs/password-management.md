@@ -16,6 +16,20 @@ New passwords must contain 12–64 characters and cannot be blank. Current passw
 
 Errors use the existing ApiError schema: 400 invalid input, incorrect current password, or invalid/expired/used reset token; 401 unauthenticated/revoked credentials for password change; 429 valid reset token but monthly allowance exhausted, with `Retry-After` seconds until the next UTC month; 503 SMTP/sender or queued-token encryption key not configured. Eligible requests return 202 after token/outbox commit; SMTP and broker failures happen in the background, retaining the original token expiry for bounded retries. Unknown accounts, requests within the cooldown and accounts at the monthly limit also return 202 without sending email. This avoids account disclosure through response bodies/statuses; database work can still cause timing differences, but HTTP no longer waits for SMTP or broker I/O.
 
+## Password change confirmations
+
+Both successful change-password and reset-password atomically save a request-context
+audit and queue a confirmation to the affected account. Context includes the
+connection IP and bounded optional User-Agent with inferred browser/device; client
+metadata is untrusted and may be unknown. Failed/rejected/rolled-back requests
+create neither audit nor confirmation. Missing SMTP or paused delivery retains
+receipts while allowing password replacement. The existing 204 response does not
+confirm delivery. See [confirmation workflow and operations](password-change-notifications.md).
+
+Password-change records and successful login context are available through the
+workspace-scoped and Super Admin [security history APIs](account-security-history.md).
+These read-only APIs expose metadata without passwords, token values or encrypted mail.
+
 ## Reset flow
 
 1. Submit the email to forgot-password. Eligible requests commit token and encrypted email receipt atomically, then return generic 202 without waiting for SMTP or RabbitMQ. The background publisher/consumer delivers the email; acceptance does not prove delivery.

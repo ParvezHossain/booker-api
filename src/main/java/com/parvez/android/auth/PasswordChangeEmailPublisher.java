@@ -1,0 +1,85 @@
+package com.parvez.android.auth;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageDeliveryMode;
+import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+/** Bounded confirmed publication of opaque IDs; PostgreSQL remains authoritative. */
+@Component
+@ConditionalOnProperty(name = "app.password-change.email.enabled", havingValue = "true", matchIfMissing = true)
+public class PasswordChangeEmailPublisher {
+    private static final Logger log = LoggerFactory.getLogger(PasswordChangeEmailPublisher.class);
+    private final JdbcTemplate jdbc;
+    private final TransactionTemplate transaction;
+    private final RabbitTemplate rabbit;
+    private final PasswordChangeEmailSettings settings;
+    private final SmtpPasswordChangeDelivery delivery;
+    private boolean configurationWarningLogged;
+
+    public PasswordChangeEmailPublisher(JdbcTemplate jdbc, TransactionTemplate transaction, RabbitTemplate rabbit,
+            PasswordChangeEmailSettings settings, SmtpPasswordChangeDelivery delivery) {
+        this.jdbc = jdbc; this.transaction = transaction; this.rabbit = rabbit; this.settings = settings; this.delivery = delivery;
+    }
+
+    @Scheduled(scheduler = "passwordChangeEmailScheduler", fixedDelayString = "${app.password-change.email.poll-millis:1000}",
+            initialDelayString = "${app.password-change.email.poll-millis:1000}")
+    public void processPending() {
+        try {
+            if (!delivery.isConfigured()) {
+                if (!configurationWarningLogged) {
+                    log.warn("Password change email publication paused: configure SMTP and PASSWORD_CHANGE_EMAIL_FROM (or PASSWORD_RESET_FROM)");
+                    configurationWarningLogged = true;
+                }
+                return;
+            }
+            configurationWarningLogged = false;
+            for (int i = 0; i < settings.batchSize(); i++) {
+                if (!Boolean.TRUE.equals(transaction.execute(status -> publishOne()))) return;
+            }
+        } catch (RuntimeException failure) {
+            log.warn("Password change email publication unavailable; database receipts remain pending");
+        }
+    }
+
+    private boolean publishOne() {
+        var rows = jdbc.queryForList("""
+                SELECT id FROM password_change_emails
+                WHERE failed_at IS NULL AND available_at <= clock_timestamp()
+                    AND (lease_until IS NULL OR lease_until <= clock_timestamp())
+                    AND (published_at IS NULL OR published_at <= clock_timestamp() - (? * interval '1 second'))
+                ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
+                """, settings.redispatchSeconds());
+        if (rows.isEmpty()) return false;
+        UUID id = (UUID) rows.getFirst().get("id");
+        var properties = new MessageProperties();
+        properties.setContentType("text/plain"); properties.setContentEncoding("US-ASCII");
+        properties.setDeliveryMode(MessageDeliveryMode.PERSISTENT); properties.setMessageId(id.toString());
+        var correlation = new CorrelationData();
+        rabbit.send("", settings.queue(), new Message(id.toString().getBytes(StandardCharsets.US_ASCII), properties), correlation);
+        try {
+            var confirmation = correlation.getFuture().get(5, TimeUnit.SECONDS);
+            if (!confirmation.ack() || correlation.getReturned() != null)
+                throw new IllegalStateException("Password change email publication was not confirmed/routed");
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Password change email publication interrupted");
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException failure) {
+            throw new IllegalStateException("Password change email publication not confirmed");
+        }
+        jdbc.update("UPDATE password_change_emails SET published_at=clock_timestamp() WHERE id=?", id);
+        return true;
+    }
+}

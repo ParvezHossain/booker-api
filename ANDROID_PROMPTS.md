@@ -10,7 +10,7 @@ possible client choices, not verified dependencies in this backend repository.
 the target deployment when generating a client; this document does not maintain a
 second hand-authored OpenAPI snapshot. Architecture/configuration and provider
 constraints are in [PDF reading](docs/book-reading.md) and
-[operations](docs/operations.md). There are 43 implemented business operations.
+[operations](docs/operations.md). There are 47 implemented business operations.
 
 ## Contract invariants
 
@@ -230,8 +230,32 @@ seconds and avoid automatic retries. After renewal a fresh email may be required
 Forgot-password stays generic 202 without email at exhaustion; 202 does not prove
 delivery or remaining allowance. Authenticated change-password does not count.
 Do not log links/tokens or claim the app-link handler exists until implemented.
+
+The backend queues a security confirmation to the affected account after a successful
+change/reset and audits connection IP plus optional User-Agent/browser/device. A 204
+does not confirm SMTP delivery. Use normal client User-Agent behavior (an accurate
+app/platform agent may be supplied by Android); do not add recipient/workspace/IP
+selectors or send email from the client. Client metadata is untrusted and may be unknown.
+
 Test wrong/expired/replayed reset, monthly 429, generic quota-exhausted 202,
 session cleanup and admin/workspace access boundaries.
+
+## Account security history integration
+
+Use API.md section 7.2 for successful-login and password-change/reset history.
+Workspace UI reads `/api/workspace/login-history` and
+`/api/workspace/password-change-history`; Super Admin UI uses `/api/admin/login-history`
+and `/api/admin/password-change-history`, optionally filtered by workspaceId.
+Respect 403 without changing local identity or attempting a workspace selector on
+an own-history route. Each response is {items,nextCursor}, with limit 1–100 (default
+50), UTC timestamps and nullable workspace/IP/User-Agent fields. Use nextCursor
+with the same history/filter, refresh from page one for new arrivals, and reset the
+cursor when changing filters. These pages expose no totals or aggregate metrics.
+Treat device/browser as client-reported, render raw User-Agent as text, avoid logs
+and persistent caches of activity metadata, and show empty/unknown states. Ordinary
+Basic/Bearer requests and refreshes are not new logins. Test workspace/admin scope,
+secret-free rendering, pagination, invalid cursors, 400/401/403 and session invalidation.
+These are client requirements; this repository implements the backend only.
 
 ## Release acceptance
 

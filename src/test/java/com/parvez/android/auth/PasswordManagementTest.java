@@ -55,6 +55,7 @@ class PasswordManagementTest {
         mvc.perform(post("/api/auth/change-password").header("Authorization", "Bearer "+pair.accessToken())
                 .contentType("application/json").content("{\"currentPassword\":\"wrong\",\"newPassword\":\""+fresh+"\"}"))
                 .andExpect(status().isBadRequest());
+        assertEquals(0, changeCount(email));
         assertNotNull(tokens.decodeAccess(pair.accessToken()));
         mvc.perform(post("/api/auth/change-password").header("Authorization", "Bearer "+pair.accessToken())
                 .contentType("application/json").content("{\"currentPassword\":\""+old+"\",\"newPassword\":\""+fresh+"\"}"))
@@ -63,7 +64,8 @@ class PasswordManagementTest {
         assertThrows(Exception.class, () -> tokens.refresh(pair.refreshToken()));
         assertThrows(Exception.class, () -> tokens.login(email, old));
         assertNotNull(tokens.login(email, fresh));
-        assertThrows(Exception.class, () -> passwords.reset(pending, fresh));
+        assertThrows(Exception.class, () -> passwords.reset(pending, fresh, PasswordChangeContext.unknown()));
+        assertEquals(1, changeCount(email));
     }
     @Test void resetEmailHashCooldownReplayAndRevocation() throws Exception {
         var pair = tokens.login(email, old);
@@ -77,6 +79,7 @@ class PasswordManagementTest {
         mvc.perform(post("/api/auth/reset-password").contentType("application/json")
                 .content(resetBody(token, fresh))).andExpect(status().isBadRequest());
         assertEquals(1, resetCount(email));
+        assertEquals(1, changeCount(email));
         mvc.perform(get("/api/workspace").header("Authorization", "Bearer "+pair.accessToken())).andExpect(status().isUnauthorized());
         assertThrows(Exception.class, () -> tokens.refresh(pair.refreshToken()));
         assertNotNull(tokens.login(email, fresh));
@@ -100,8 +103,8 @@ class PasswordManagementTest {
         String first = requestToken();
         jdbc.update("UPDATE password_reset_tokens SET requested_at=now()-interval '61 seconds' WHERE email=?",email);
         String second = requestToken();
-        assertThrows(Exception.class, () -> passwords.reset(first,fresh));
-        Callable<Boolean> consume = () -> { try { passwords.reset(second,fresh); return true; } catch (org.springframework.web.server.ResponseStatusException ex) { return false; } };
+        assertThrows(Exception.class, () -> passwords.reset(first, fresh, PasswordChangeContext.unknown()));
+        Callable<Boolean> consume = () -> { try { passwords.reset(second, fresh, PasswordChangeContext.unknown()); return true; } catch (org.springframework.web.server.ResponseStatusException ex) { return false; } };
         try (var pool = Executors.newFixedThreadPool(2)) {
             var results = pool.invokeAll(List.of(consume,consume));
             assertNotEquals(results.get(0).get(),results.get(1).get());
@@ -132,7 +135,7 @@ class PasswordManagementTest {
     @Test void missingEmailConfigurationIsUnavailableForEveryAccount() {
         var unavailable = mock(PasswordResetDelivery.class);
         var service = new PasswordService(jdbc, context.getBean(org.springframework.security.crypto.password.PasswordEncoder.class),
-                unavailable, java.time.Duration.ofMinutes(30), 3);
+                unavailable, context.getBean(PasswordChangeNotifications.class), java.time.Duration.ofMinutes(30), 3);
         for (String account : List.of(email,"absent@example.com")) {
             var failure = assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> service.forgot(account));
             assertEquals(503,failure.getStatusCode().value());
@@ -215,7 +218,7 @@ class PasswordManagementTest {
                 FROM (VALUES (interval '-1 microsecond'), (interval '1 month'), (interval '1 month 1 second')) dates(elapsed)
                 """, email);
         String token = requestToken();
-        passwords.reset(token, fresh);
+        passwords.reset(token, fresh, PasswordChangeContext.unknown());
         assertEquals(4, resetCount(email));
         assertNotNull(tokens.login(email, fresh));
     }
@@ -225,7 +228,7 @@ class PasswordManagementTest {
         String admin = "reset-admin-" + UUID.randomUUID() + "@example.com";
         accounts.provisionSuperAdmin(admin, old);
         String token = requestToken(admin);
-        passwords.reset(token, fresh);
+        passwords.reset(token, fresh, PasswordChangeContext.unknown());
         assertEquals(1, resetCount(admin));
         assertEquals(3, resetCount(email));
         mvc.perform(post("/api/auth/change-password")
@@ -258,14 +261,18 @@ class PasswordManagementTest {
         var transaction = new org.springframework.transaction.support.TransactionTemplate(
                 context.getBean(org.springframework.transaction.PlatformTransactionManager.class));
         assertThrows(IllegalStateException.class, () -> transaction.executeWithoutResult(status -> {
-            passwords.reset(token, fresh);
+            passwords.reset(token, fresh, PasswordChangeContext.unknown());
             throw new IllegalStateException("Test-only rollback");
         }));
         assertEquals(0, resetCount(email));
+        assertEquals(0, changeCount(email));
+        assertEquals(0, jdbc.queryForObject("""
+                SELECT count(*) FROM password_change_emails e JOIN password_change_history h ON h.id=e.id WHERE h.email=?
+                """, Integer.class, email));
         assertNotNull(tokens.decodeAccess(session.accessToken()));
         assertNotNull(tokens.refresh(session.refreshToken()));
         assertNotNull(tokens.login(email, old));
-        passwords.reset(token, fresh);
+        passwords.reset(token, fresh, PasswordChangeContext.unknown());
         assertEquals(1, resetCount(email));
         assertNotNull(tokens.login(email, fresh));
     }
@@ -277,14 +284,14 @@ class PasswordManagementTest {
                 context.getBean(org.springframework.transaction.PlatformTransactionManager.class));
         var encoder = context.getBean(org.springframework.security.crypto.password.PasswordEncoder.class);
         var delivery = context.getBean(PasswordResetDelivery.class);
-        var lower = new PasswordService(jdbc, encoder, delivery, java.time.Duration.ofMinutes(30), 1);
+        var lower = new PasswordService(jdbc, encoder, delivery, context.getBean(PasswordChangeNotifications.class), java.time.Duration.ofMinutes(30), 1);
         var rejected = assertThrows(PasswordResetLimitExceededException.class,
-                () -> transaction.executeWithoutResult(status -> lower.reset(token, fresh)));
+                () -> transaction.executeWithoutResult(status -> lower.reset(token, fresh, PasswordChangeContext.unknown())));
         assertEquals(429, rejected.getStatusCode().value());
         assertTrue(rejected.getReason().contains("at most 1 times"));
         assertEquals(3, resetCount(email));
-        var higher = new PasswordService(jdbc, encoder, delivery, java.time.Duration.ofMinutes(30), 5);
-        transaction.executeWithoutResult(status -> higher.reset(token, fresh));
+        var higher = new PasswordService(jdbc, encoder, delivery, context.getBean(PasswordChangeNotifications.class), java.time.Duration.ofMinutes(30), 5);
+        transaction.executeWithoutResult(status -> higher.reset(token, fresh, PasswordChangeContext.unknown()));
         assertEquals(4, resetCount(email));
         assertNotNull(tokens.login(email, fresh));
     }
@@ -303,6 +310,48 @@ class PasswordManagementTest {
 
     private int resetCount(String account) {
         return jdbc.queryForObject("SELECT count(*) FROM password_reset_history WHERE email=?", Integer.class, account);
+    }
+
+    private int changeCount(String account) {
+        return jdbc.queryForObject("SELECT count(*) FROM password_change_history WHERE email=?", Integer.class, account);
+    }
+
+    @Test void changeCapturesConnectionAndBoundedClientMetadataForAffectedWorkspaceOnly() throws Exception {
+        String other = "other-change-" + UUID.randomUUID() + "@example.com";
+        accounts.register(new WorkspaceAccounts.Signup("Other workspace", other, old));
+        String agent = "Mozilla/5.0 (Windows NT 10.0) Chrome/140.0 Safari/537.36 Edg/140.0 " + "x".repeat(600);
+        mvc.perform(post("/api/auth/change-password")
+                .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic(email, old))
+                .with(request -> { request.setRemoteAddr("203.0.113.42"); return request; })
+                .header("User-Agent", agent).header("X-Forwarded-For", "198.51.100.9")
+                .header("Forwarded", "for=198.51.100.10")
+                .contentType("application/json").content("{\"currentPassword\":\""+old+"\",\"newPassword\":\""+fresh+"\"}"))
+                .andExpect(status().isNoContent());
+        var audit = jdbc.queryForMap("SELECT * FROM password_change_history WHERE email=?", email);
+        assertEquals("203.0.113.42", audit.get("ip_address"));
+        assertEquals(agent.substring(0, 512), audit.get("user_agent"));
+        assertEquals("Edge", audit.get("browser"));
+        assertEquals("Computer / Windows", audit.get("device"));
+        assertEquals("CHANGE", audit.get("source"));
+        assertEquals(jdbc.queryForObject("SELECT workspace_id FROM workspace_users WHERE email=?", UUID.class, email), audit.get("workspace_id"));
+        assertEquals(0, changeCount(other));
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM password_change_emails WHERE id=?", Integer.class, audit.get("id")));
+        verifyNoInteractions(mail);
+    }
+
+    @Test void resetCapturesResettingDeviceAndNotRecoveryRequestDevice() throws Exception {
+        String token = requestToken();
+        mvc.perform(post("/api/auth/reset-password")
+                .with(request -> { request.setRemoteAddr("2001:db8::7"); return request; })
+                .header("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Version/18.0 Mobile/15E148 Safari/604.1")
+                .contentType("application/json").content(resetBody(token, fresh)))
+                .andExpect(status().isNoContent());
+        var audit = jdbc.queryForMap("SELECT * FROM password_change_history WHERE email=?", email);
+        assertEquals("RESET", audit.get("source"));
+        assertEquals("2001:db8::7", audit.get("ip_address"));
+        assertEquals("Safari", audit.get("browser"));
+        assertEquals("iPhone / iOS", audit.get("device"));
+        assertEquals(1, changeCount(email));
     }
 
     private void seedCurrentResets(String account, int count) {

@@ -9,10 +9,11 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.servlet.http.HttpServletRequest;
+import com.parvez.android.saas.WorkspacePrincipal;
 import jakarta.validation.constraints.*;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -22,14 +23,15 @@ public class PasswordController {
     private final PasswordService passwords;
     public PasswordController(PasswordService passwords) { this.passwords = passwords; }
 
-    @ApiResponse(responseCode = "204", description = "Password changed; all account tokens revoked", content = @Content)
+    @ApiResponse(responseCode = "204", description = "Password changed; account tokens revoked; audit and confirmation email receipt committed", content = @Content)
     @ApiResponse(responseCode = "400", description = "Invalid input or current password", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @ApiResponse(responseCode = "401", description = "Authentication required", content = @Content)
     @PostMapping("/change-password")
-    @Operation(summary = "Change your password", description = "Requires the current password. Returns 204; revokes all access/refresh/reset tokens. Invalid current password or input: 400; unauthenticated: 401.",
+    @Operation(summary = "Change your password", description = "Requires the current password. Returns 204; revokes all access/refresh/reset tokens. Atomically records account/workspace, change time, connection IP and bounded User-Agent with inferred browser/device, and queues a confirmation email to the affected account. User-Agent is untrusted; forwarded IP headers are ignored under the default server configuration. SMTP/RabbitMQ run in background with bounded retries; 204 does not confirm delivery. Missing SMTP configuration retains the pending receipt without blocking the password change. Invalid current password or input: 400; unauthenticated: 401.",
             security = {@SecurityRequirement(name = "bearerAuth"), @SecurityRequirement(name = "basicAuth")})
-    public ResponseEntity<Void> change(Authentication authentication, @Valid @RequestBody Change request) {
-        passwords.change(authentication.getName(), request.currentPassword(), request.newPassword());
+    public ResponseEntity<Void> change(@Valid @RequestBody Change request, HttpServletRequest servletRequest) {
+        passwords.change(WorkspacePrincipal.currentEmail(), request.currentPassword(), request.newPassword(),
+                PasswordChangeContext.from(servletRequest));
         return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
     }
 
@@ -44,15 +46,15 @@ public class PasswordController {
                 .body(new Message("If the account exists, a password reset email will be sent."));
     }
 
-    @ApiResponse(responseCode = "204", description = "Password reset; all account tokens revoked", content = @Content)
+    @ApiResponse(responseCode = "204", description = "Password reset; account tokens revoked; audit and confirmation email receipt committed", content = @Content)
     @ApiResponse(responseCode = "400", description = "Invalid input or expired, invalid or used token", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @ApiResponse(responseCode = "429", description = "Valid token but monthly successful-reset allowance exhausted",
             headers = @Header(name = "Retry-After", description = "Seconds until the next UTC calendar month, rounded up", schema = @Schema(type = "integer", format = "int64")),
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @PostMapping("/reset-password")
-    @Operation(summary = "Reset password with an emailed token", description = "Public. Returns 204. A valid unexpired token is single use. At most 3 successful resets per account per UTC calendar month by default, configurable via PASSWORD_RESET_MONTHLY_LIMIT. Invalid/expired/replayed token or invalid input: 400. Valid token at the limit: 429 with Retry-After seconds until the next month; password, sessions and token remain unchanged. Only committed successful resets consume allowance; authenticated change-password is excluded. Revokes all existing access, refresh and reset tokens on success; log in again.")
-    public ResponseEntity<Void> reset(@Valid @RequestBody Reset request) {
-        passwords.reset(request.token(), request.newPassword());
+    @Operation(summary = "Reset password with an emailed token", description = "Public. Returns 204. A valid unexpired token is single use. At most 3 successful resets per account per UTC calendar month by default, configurable via PASSWORD_RESET_MONTHLY_LIMIT. Invalid/expired/replayed token or invalid input: 400. Valid token at the limit: 429 with Retry-After seconds until the next month; password, sessions and token remain unchanged. Only committed successful resets consume allowance; authenticated change-password is excluded. Revokes all existing access, refresh and reset tokens on success; log in again. Atomically records the resetting request's connection IP and bounded User-Agent with inferred browser/device, and queues a confirmation email to the affected account. Delivery is asynchronous with bounded retries; 204 does not confirm delivery. Invalid, quota-rejected and rolled-back attempts create no confirmation receipt.")
+    public ResponseEntity<Void> reset(@Valid @RequestBody Reset request, HttpServletRequest servletRequest) {
+        passwords.reset(request.token(), request.newPassword(), PasswordChangeContext.from(servletRequest));
         return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
     }
 

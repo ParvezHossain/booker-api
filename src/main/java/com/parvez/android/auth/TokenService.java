@@ -27,19 +27,21 @@ public class TokenService {
     private final WorkspaceAccounts accounts;
     private final PasswordEncoder passwords;
     private final JdbcTemplate jdbc;
+    private final LoginAudit loginAudit;
     private final JwtEncoder encoder;
     private final NimbusJwtDecoder decoder;
     private final Duration accessTtl;
     private final Duration refreshTtl;
     private final String dummyPassword;
 
-    public TokenService(WorkspaceAccounts accounts, PasswordEncoder passwords, JdbcTemplate jdbc,
+    public TokenService(WorkspaceAccounts accounts, PasswordEncoder passwords, JdbcTemplate jdbc, LoginAudit loginAudit,
                         @Value("${app.jwt.secret}") String secret,
                         @Value("${app.jwt.access-ttl}") Duration accessTtl,
                         @Value("${app.jwt.refresh-ttl}") Duration refreshTtl) {
         this.accounts = accounts;
         this.passwords = passwords;
         this.jdbc = jdbc;
+        this.loginAudit = loginAudit;
         byte[] bytes = Base64.getDecoder().decode(secret);
         if (bytes.length < 32) throw new IllegalArgumentException("JWT_SECRET must contain at least 32 random bytes encoded as base64");
         if (accessTtl.toSeconds() < 1 || refreshTtl.compareTo(accessTtl) <= 0)
@@ -55,6 +57,11 @@ public class TokenService {
 
     @Transactional
     public Tokens login(String email, String password) {
+        return login(email, password, PasswordChangeContext.unknown());
+    }
+
+    @Transactional
+    public Tokens login(String email, String password, PasswordChangeContext context) {
         lockAccount(email.strip().toLowerCase(java.util.Locale.ROOT));
         org.springframework.security.core.userdetails.UserDetails user;
         try {
@@ -64,7 +71,9 @@ public class TokenService {
             throw unauthorized();
         }
         if (!passwords.matches(password, user.getPassword())) throw unauthorized();
-        return issue(user.getUsername());
+        var tokens = issue(user.getUsername());
+        loginAudit.record(user.getUsername(), context);
+        return tokens;
     }
 
     @Transactional

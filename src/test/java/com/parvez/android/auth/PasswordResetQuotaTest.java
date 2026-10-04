@@ -18,7 +18,7 @@ class PasswordResetQuotaTest {
     @Test void rejectsNonpositiveMonthlyLimitsAtStartup() {
         for (int limit : List.of(0, -1)) {
             var error = assertThrows(IllegalArgumentException.class, () -> new PasswordService(
-                    mock(JdbcTemplate.class), mock(PasswordEncoder.class), mock(PasswordResetDelivery.class),
+                    mock(JdbcTemplate.class), mock(PasswordEncoder.class), mock(PasswordResetDelivery.class), mock(PasswordChangeNotifications.class),
                     Duration.ofMinutes(30), limit));
             assertEquals("Password reset monthly limit must be positive", error.getMessage());
         }
@@ -38,7 +38,7 @@ class PasswordResetQuotaTest {
                 .thenReturn(2);
         when(jdbc.update("DELETE FROM password_reset_tokens WHERE email = ? AND token_hash = ? AND expires_at > ?",
                 email, digest, Timestamp.from(now))).thenReturn(1);
-        new PasswordService(jdbc, encoder, mock(PasswordResetDelivery.class), Duration.ofMinutes(30), 3).reset(token, "new-password-123");
+        new PasswordService(jdbc, encoder, mock(PasswordResetDelivery.class), mock(PasswordChangeNotifications.class), Duration.ofMinutes(30), 3).reset(token, "new-password-123", PasswordChangeContext.unknown());
         var ordered = inOrder(jdbc);
         ordered.verify(jdbc).queryForList("SELECT email FROM workspace_users WHERE email = ? FOR UPDATE", email);
         ordered.verify(jdbc).queryForObject("SELECT clock_timestamp()", Timestamp.class);

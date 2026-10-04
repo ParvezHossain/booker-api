@@ -83,7 +83,7 @@ Responses are direct objects/arrays without a common success envelope. IDs are n
 
 `Instant` fields serialize as ISO-8601 timestamps with an offset/UTC `Z`; fractional seconds may be present. `ApiError.dateTime` is LocalDateTime **without an offset**. `publishedDate` is an arbitrary nonblank string up to 20 characters, not a parsed ISO date. Clients must tolerate nullable fields and use server progress calculations.
 
-No endpoint implements page/size pagination or a client sort parameter. Lists return arrays with no total-count/total-pages envelope. Book lists support exact author/title filtering; admin book requests support exact status filtering. Request history is sorted by createdAt descending, summaries by numeric bookId ascending; book list order is not explicitly specified.
+No endpoint implements page/size pagination or a client sort parameter. Account security history uses bounded UUID cursor pages with {items,nextCursor}; other lists return arrays with no total-count/total-pages envelope. Book lists support exact author/title filtering; admin book requests support exact status filtering. Request history is sorted by createdAt descending, summaries by numeric bookId ascending; book list order is not explicitly specified.
 
 Browser CORS defaults to `http://localhost:4200`, configurable with comma-separated `CORS_ALLOWED_ORIGINS`. Allowed methods: GET, HEAD, POST, PUT, DELETE. Allowed headers: Authorization, Cache-Control, Content-Type, Last-Event-ID, Range, If-Range, Idempotency-Key. Exposed headers: Content-Length, Content-Range, Accept-Ranges, Content-Disposition, ETag, Retry-After. Location is not in that exposure list. CORS configuration does not enable credentials; browser-based Drive cookie handoff should use the same-origin API/proxy flow. Native Android HTTP requests are not governed by browser CORS.
 
@@ -278,7 +278,7 @@ Endpoint examples and field tables below reference these reusable schemas. Array
 
 ## 5. Endpoint inventory
 
-**43 business operations**, plus the password-token copy page, Actuator health and one denied legacy root mapping: **46 method/path entries** below. Implicit framework HEAD/OPTIONS handling, Swagger assets and framework error dispatch are not additional business APIs. Each entry has a detailed section.
+**47 business operations**, plus the password-token copy page, Actuator health and one denied legacy root mapping: **50 method/path entries** below. Implicit framework HEAD/OPTIONS handling, Swagger assets and framework error dispatch are not additional business APIs. Each entry has a detailed section.
 
 | Method | Endpoint | Access | Purpose |
 | --- | --- | --- | --- |
@@ -291,6 +291,10 @@ Endpoint examples and field tables below reference these reusable schemas. Array
 | POST | `/api/auth/reset-password` | No | Reset password |
 | GET | `/password-reset-token` | No | Browser token copy helper (HTML) |
 | GET | `/api/workspace` | Workspace | Get current workspace |
+| GET | `/api/workspace/login-history` | Workspace | Page through own workspace login history |
+| GET | `/api/workspace/password-change-history` | Workspace | Page through own workspace password change/reset history |
+| GET | `/api/admin/login-history` | Super Admin | Page through all account login history |
+| GET | `/api/admin/password-change-history` | Super Admin | Page through all password change/reset history |
 | GET | `/api/books` | Workspace | List or search private books |
 | GET | `/api/books/{bookId}` | Workspace | Get private book |
 | POST | `/api/books` | Workspace | Create private book |
@@ -415,6 +419,7 @@ POST /api/auth/login
 | Header | Type | Required | Description |
 | --- | --- | --- | --- |
 | Content-Type | String | Yes | application/json |
+| User-Agent | String | No | Client-reported metadata; bounded to 512 code points in successful login audit. |
 
 **Request body and fields**
 
@@ -465,6 +470,14 @@ Content-Type: application/json
 | 401 | Unknown email or incorrect password: Invalid credentials or refresh token. |
 
 **Business / implementation notes**
+
+A successful login atomically saves account/workspace, post-lock database time,
+connection IP and bounded optional User-Agent with inferred browser/device in
+`login_history` alongside refresh-token issuance. Audit failure rolls issuance back.
+Failed/unknown-account logins, validation errors, refreshes, rollback and ordinary
+Basic/Bearer-authenticated requests do not create login events. Own-workspace and
+Super Admin read APIs are described in [section 7.2](#72-account-security-history).
+
 
 OWNER and SUPER_ADMIN use the same login. Each login creates an independent refresh session. Cache-Control: no-store; Pragma: no-cache.
 
@@ -607,6 +620,7 @@ POST /api/auth/change-password
 | --- | --- | --- | --- |
 | Authorization | String | Yes | Bearer <access-token>; Basic alternative. |
 | Content-Type | String | Yes | application/json |
+| User-Agent | String | No | Optional client-reported browser/device metadata; bounded to 512 code points for the audit and confirmation. |
 
 **Request body and fields**
 
@@ -651,6 +665,17 @@ Response Fields: None.
 **Business / implementation notes**
 
 Revokes all account access/refresh/reset tokens by credential-version increment and record deletion. Log in again. Works for workspace owners and Super Admin. Cache-Control: no-store.
+
+Successful change/reset also atomically records the affected account/workspace,
+database change time, connection IP, bounded optional `User-Agent` and inferred
+browser/device, then queues a security confirmation to the affected account. No
+new JSON fields are required. User-Agent is untrusted; forwarded IP headers are
+ignored under the default server configuration (a proxy connection may be recorded).
+Unknown agents show `Unknown`. Invalid/rejected/rolled-back attempts create no
+confirmation. SMTP/RabbitMQ run in the background; 204 confirms database acceptance,
+not delivery. Missing SMTP configuration retains pending receipts without blocking
+the operation. See [confirmation delivery and audit](docs/password-change-notifications.md).
+
 
 ### 6.6 Request password reset
 
@@ -735,6 +760,7 @@ POST /api/auth/reset-password
 | Header | Type | Required | Description |
 | --- | --- | --- | --- |
 | Content-Type | String | Yes | application/json |
+| User-Agent | String | No | Optional client-reported browser/device metadata; bounded to 512 code points for the audit and confirmation. |
 
 **Request body and fields**
 
@@ -778,6 +804,19 @@ Response Fields: None.
 **Business / implementation notes**
 
 Example token illustrates syntax only: use the actual emailed token. Single-use reset revokes all account sessions and reset tokens. Log in again. Cache-Control: no-store.
+
+Successful change/reset also atomically records the affected account/workspace,
+database change time, connection IP, bounded optional `User-Agent` and inferred
+browser/device, then queues a security confirmation to the affected account. No
+new JSON fields are required. User-Agent is untrusted; forwarded IP headers are
+ignored under the default server configuration (a proxy connection may be recorded).
+Unknown agents show `Unknown`. Invalid/rejected/rolled-back attempts create no
+confirmation. SMTP/RabbitMQ run in the background; 204 confirms database acceptance,
+not delivery. Missing SMTP configuration retains pending receipts without blocking
+the operation. See [confirmation delivery and audit](docs/password-change-notifications.md).
+
+The audit context comes from this reset request, not the earlier forgot-password request.
+
 
 `PASSWORD_RESET_MONTHLY_LIMIT` is a positive integer, default **3 successful resets
 per account per UTC calendar month**, persisted across restarts and replicas.
@@ -873,6 +912,140 @@ Content-Type: application/json
 **Business / implementation notes**
 
 Workspace is derived from authenticated account. Super Admin has no workspace. PRO entitlements/limits are operator-managed; no payments or upgrade endpoint.
+
+### 7.2 Account security history
+
+Four authenticated read endpoints expose persisted activity. Workspace scope comes
+from `WorkspacePrincipal`. Only `SUPER_ADMIN` can select another workspace or read
+all workspaces. Both Bearer and legacy Basic are supported. All successful responses
+include `Cache-Control: no-store`. No credentials, password hashes, token values or
+email ciphertext are returned.
+
+| Method/path | Authorization | History |
+| --- | --- | --- |
+| `GET /api/workspace/login-history` | Workspace; Super Admin receives 403 | Successful credential logins across accounts in the caller's workspace |
+| `GET /api/workspace/password-change-history` | Workspace; Super Admin receives 403 | Committed CHANGE and RESET events across that workspace |
+| `GET /api/admin/login-history` | SUPER_ADMIN only | All workspace and Super Admin successful logins |
+| `GET /api/admin/password-change-history` | SUPER_ADMIN only | All workspace and Super Admin password changes/resets |
+
+**Request headers**
+
+| Header | Type | Required | Description |
+| --- | --- | --- | --- |
+| Authorization | String | Yes | Bearer access token or legacy Basic authentication. |
+
+**Query parameters**
+
+| Parameter | Type | Required | Validation / description |
+| --- | --- | --- | --- |
+| limit | Integer | No | Default 50; range 1–100. Bounds returned items. |
+| cursor | UUID | No | Use the previous response's nextCursor with the same endpoint and workspace filter. |
+| workspaceId | UUID | No; admin endpoints only | Restrict Super Admin results to one workspace. Unknown workspace returns an empty page. Own-workspace endpoints do not accept a scope selector; unrelated selector parameters cannot change scope. |
+
+**Examples**
+
+```sh
+curl -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$API_BASE/api/workspace/login-history?limit=50"
+
+curl -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$API_BASE/api/workspace/password-change-history?limit=50"
+
+curl -H "Authorization: Bearer $SUPER_ADMIN_ACCESS_TOKEN" \
+  "$API_BASE/api/admin/login-history?workspaceId=$WORKSPACE_ID&limit=50"
+
+curl -H "Authorization: Bearer $SUPER_ADMIN_ACCESS_TOKEN" \
+  "$API_BASE/api/admin/password-change-history?limit=50"
+```
+
+**Login history response — HTTP 200**
+
+```json
+{
+  "items": [
+    {
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "email": "owner@example.com",
+      "workspaceId": "33333333-3333-4333-8333-333333333333",
+      "workspaceName": "My Library",
+      "loggedInAt": "2026-10-04T11:15:13Z",
+      "ipAddress": "203.0.113.42",
+      "browser": "Chrome",
+      "device": "Computer / Linux",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+**Password change history response — HTTP 200**
+
+```json
+{
+  "items": [
+    {
+      "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "email": "owner@example.com",
+      "workspaceId": "33333333-3333-4333-8333-333333333333",
+      "workspaceName": "My Library",
+      "source": "CHANGE",
+      "changedAt": "2026-10-04T11:20:13Z",
+      "ipAddress": "203.0.113.42",
+      "browser": "Chrome",
+      "device": "Computer / Linux",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+**Response fields**
+
+| Field | Type | Description |
+| --- | --- | --- |
+| items | Array | At most limit explicit history DTOs; [] for no records. |
+| nextCursor | UUID or null | Last returned item's UUID when more records exist; null at the end. |
+| items[].id | UUID | Durable event identifier. |
+| items[].email | String | Normalized affected account email. |
+| items[].workspaceId | UUID or null | Workspace UUID captured at the event, retained if that workspace is later removed; null for Super Admin accounts. |
+| items[].workspaceName | String or null | Current workspace name; null for an account without a workspace or removed workspace. |
+| items[].loggedInAt | ISO-8601 UTC timestamp | Login pages only; database time when successful login audit was inserted after the account lock. |
+| items[].source | CHANGE or RESET | Password pages only; authenticated replacement or successful token recovery. |
+| items[].changedAt | ISO-8601 UTC timestamp | Password pages only; database time of the replacement audit. |
+| items[].ipAddress | String or null | Connection address from getRemoteAddr(); a proxy/VPN may be recorded. Forwarded headers are ignored under default configuration. |
+| items[].browser | String | Best-effort browser family from client-reported User-Agent, or Unknown. |
+| items[].device | String | Best-effort device/OS family, or Unknown; does not identify physical hardware. |
+| items[].userAgent | String or null | Client-reported metadata, stripped of control characters and bounded to 512 Unicode code points. Render as text, never HTML. |
+
+**Errors**
+
+| Status | Condition |
+| --- | --- |
+| 400 | Invalid limit/UUID; unknown/deleted cursor, wrong-history cursor, or cursor outside the selected scope; ApiError. |
+| 401 | Authentication missing, invalid or revoked; security-filter body is not fixed. |
+| 403 | Workspace account requests admin history, or Super Admin requests own-workspace history. Filter rejections use their separate body contract; service rejections use ApiError. |
+
+**Persistence and pagination**
+
+Only committed successful POST /api/auth/login creates a login event. Failed attempts,
+refresh/logout, signup, rollback and ordinary Basic/Bearer API calls are excluded.
+Password history reuses V17 audit records; invalid/quota-rejected/rolled-back changes
+are excluded and delivery/deletion of email receipts does not remove audit records.
+V18 preserves populated password audit/receipt/session data and begins login capture
+without fabricating earlier events. Audit capture does not require SMTP/RabbitMQ.
+V19 makes workspace IDs event-time snapshots without workspace foreign-key locks; the
+account foreign key remains, preserving deletion behavior and account serialization.
+
+Order is newest event timestamp first, then UUID descending for ties. UUID cursor
+lookup is authorized for this history/filter before reading a page; lookup and fetch
+use one read-only REPEATABLE READ transaction. At most limit + 1 rows are fetched
+with indexed timestamp/UUID comparisons. New records at the head do not repeat older
+records in later pages. This is a live history, not a frozen export; refresh page one
+to see later arrivals. No total count or metrics aggregate is implied by a page.
+Account deletion cascades both histories; no automatic retention or HTTP deletion
+endpoint exists. See [activity capture, scope and operations](docs/account-security-history.md).
 
 ## 8. Private books
 
@@ -3685,11 +3858,12 @@ covered in [PDF reading](docs/book-reading.md).
 | Drive | drive/GoogleDriveController.java, GoogleDriveConnectionService.java, GoogleDriveImportService.java, GoogleDriveGateway.java. |
 | Public library/requests | library/PublicBookController.java, PublicBookService.java, PublicLibraryRequestController.java, PublicLibraryRequestService.java, PublicLibraryBookRequest.java. |
 | SSE | controller/BookNotificationController.java, notification/BookEventStream.java, BookEventStore.java; Flyway event triggers. |
+| Account security history | auth/LoginAudit.java, AuthHistoryController.java, AuthHistoryService.java; Flyway V17/V18 context audit and cursor indexes; V19 workspace snapshots. |
 | Security/errors/OpenAPI | config/SecurityConfig.java, OpenApiConfig.java; exception/GlobalExceptionHandler.java; dto/ApiError.java. |
 | Runtime configuration | src/main/resources/application.properties; src/main/resources/db/migration/. |
 
-Java paths in this table are relative to `src/main/java/com/parvez/android/`. Source contracts were cross-checked against existing test cases including OpenApiCoverageTest (43 business mappings), TokenAuthenticationTest, PasswordManagementTest, WorkspaceIsolationTest, BookReadingIntegrationTest, BookDocumentHeadTest, ReadingCompletionTest, PublicLibraryIntegrationTest, PublicUploadHttpTest, PublicLibraryRequestIntegrationTest, GoogleDriveIntegrationTest/GatewayTest, and notification controller/stream/persistence tests. Tests check route coverage; they do not establish live provider or frontend behavior.
+Java paths in this table are relative to `src/main/java/com/parvez/android/`. Source contracts were cross-checked against existing test cases including OpenApiCoverageTest (47 business mappings), TokenAuthenticationTest, AuthHistoryIntegrationTest, PasswordManagementTest, WorkspaceIsolationTest, BookReadingIntegrationTest, BookDocumentHeadTest, ReadingCompletionTest, PublicLibraryIntegrationTest, PublicUploadHttpTest, PublicLibraryRequestIntegrationTest, GoogleDriveIntegrationTest/GatewayTest, and notification controller/stream/persistence tests. Tests check route coverage; they do not establish live provider or frontend behavior.
 
 When adding/changing routes, compare this inventory to all Spring mappings, security rules, DTO validation, service behavior and generated `/v3/api-docs`. Existing database-backed OpenApiCoverageTest compares Swagger to Spring's handler registry. Use a dedicated disposable PostgreSQL database for integration tests as explained in [README.md](README.md); tests mutate data.
 
-Further feature/deployment background: [PDF reading](docs/book-reading.md), [notifications](docs/book-notifications.md), [public library](docs/public-library.md), [book requests](docs/public-library-requests.md), [password management](docs/password-management.md). These guides document design and operational constraints; the route contracts above describe current behavior.
+Further feature/deployment background: [PDF reading](docs/book-reading.md), [notifications](docs/book-notifications.md), [public library](docs/public-library.md), [book requests](docs/public-library-requests.md), [password management](docs/password-management.md), [account security history](docs/account-security-history.md). These guides document design and operational constraints; the route contracts above describe current behavior.

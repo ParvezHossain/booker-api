@@ -47,11 +47,11 @@ commit credentials in shared IDE configurations or add a fallback signing key.
 | `SMTP_HOST`, `SMTP_PORT` | Blank host / 587; configure delivery provider |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | Backend-only provider credentials |
 | `SMTP_AUTH`, `SMTP_STARTTLS` | true / true; STARTTLS is required when enabled |
-| `PASSWORD_RESET_FROM` | Provider-approved password-reset sender; fallback sender for request mail |
+| `PASSWORD_RESET_FROM` | Provider-approved password-reset sender; fallback sender for request/confirmation mail |
 | `BOOK_REQUEST_EMAIL_FROM` | Request/decision sender; blank falls back to `PASSWORD_RESET_FROM`, then `SMTP_USERNAME`. Set explicitly if the SMTP username is not a provider-approved email address |
 | `PASSWORD_RESET_URL` | Optional; blank emails a copyable token. If set, HTTPS client landing page, no fragment; reset token appended as query parameter |
 | `PASSWORD_RESET_TOKEN_PAGE_URL` | Optional reachable URL of the backend `/password-reset-token` helper; adds an email copy action using `#token`. HTTPS required except localhost/private IPv4 LAN development; no credentials, query or fragment |
-| `PASSWORD_RESET_TIME_ZONE` | `Asia/Dhaka`; IANA timezone for email expiry display, validated at startup. Browser copy page uses the device timezone |
+| `PASSWORD_RESET_TIME_ZONE` | `Asia/Dhaka`; IANA timezone for account email time/expiry display, validated at startup. Browser copy page uses the device timezone |
 | `PASSWORD_RESET_TTL` | `PT30M`; positive, at most 24 hours |
 | `PASSWORD_RESET_MONTHLY_LIMIT` | `3`; positive integer, successful resets per account per UTC calendar month; validated at startup |
 | `PASSWORD_RESET_EMAIL_ENCRYPTION_KEY` | Dedicated stable Base64 32-byte AES key; required to accept recovery; blank yields recovery 503, malformed nonblank fails startup |
@@ -64,6 +64,16 @@ commit credentials in shared IDE configurations or add a fallback signing key.
 | `PASSWORD_RESET_EMAIL_RETRY_SECONDS` | 30; range 1–3600; exponential retry capped at one hour |
 | `PASSWORD_RESET_EMAIL_REDISPATCH_SECONDS` | 300; range 30–86400; confirmed-publication recovery window |
 | `PASSWORD_RESET_EMAIL_LEASE_SECONDS` | 60; range 30–3600; set above expected SMTP duration; stale ownership cannot finalize a new lease |
+| `PASSWORD_CHANGE_EMAIL_FROM` | Blank uses PASSWORD_RESET_FROM; provider-approved confirmation sender |
+| `PASSWORD_CHANGE_EMAIL_ENABLED` | true; false pauses confirmation delivery while audit/outbox acceptance continues |
+| `PASSWORD_CHANGE_EMAIL_QUEUE` | booker.password-change-emails; main/dead names must be distinct from request and recovery queues |
+| `PASSWORD_CHANGE_EMAIL_POLL_MILLIS` | 1000; range 100–3600000, fixed publishing delay |
+| `PASSWORD_CHANGE_EMAIL_BATCH_SIZE` | 20; range 1–100 |
+| `PASSWORD_CHANGE_EMAIL_QUEUE_LIMIT` | 1000; range 1–100000, main/dead quorum queue bounds |
+| `PASSWORD_CHANGE_EMAIL_MAX_ATTEMPTS` | 5; range 1–20, then park for operator recovery |
+| `PASSWORD_CHANGE_EMAIL_RETRY_SECONDS` | 30; range 1–3600, exponential delay capped at one hour |
+| `PASSWORD_CHANGE_EMAIL_REDISPATCH_SECONDS` | 300; range 30–86400, publication recovery window |
+| `PASSWORD_CHANGE_EMAIL_LEASE_SECONDS` | 60; range 30–3600, set above expected SMTP send time |
 | `BOOK_REQUEST_EMAIL_ENABLED` | true; pauses publisher/listener when false, leaving receipts pending |
 | `RABBITMQ_HOST`, `RABBITMQ_PORT` | 127.0.0.1 / 5672; Compose uses rabbitmq / 5672 |
 | `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD` | booker / required deployment secret; Compose requires nonempty password |
@@ -191,6 +201,14 @@ when `BOOK_REQUEST_EMAIL_ENABLED=false`; it deliberately pauses delivery.
 [Queue topology, saturation, retries, recovery and upgrade rules](request-email-queue.md)
 are maintained in one feature guide.
 
+See [password change confirmation operations](password-change-notifications.md) for
+connection-IP/forwarded-header behavior, audit access, retries, leases and parked receipt recovery.
+
+Activity history capture and the workspace/Super Admin read APIs require no additional
+`.env` variables. See [security history](account-security-history.md) for scope, bounded
+cursor queries, sensitive metadata handling and retention. SMTP/RabbitMQ pause flags
+do not disable audit capture.
+
 ## Testing
 
 Use PostgreSQL 18 and RabbitMQ 4.2 to match Compose/CI, with **disposable services**. Tests add
@@ -228,6 +246,7 @@ export BOOK_STORAGE_DIRECTORY="$(mktemp -d)"
 export MANAGEMENT_OTLP_METRICS_EXPORT_URL=''
 export BOOK_REQUEST_EMAIL_ENABLED=false
 export PASSWORD_RESET_EMAIL_ENABLED=false
+export PASSWORD_CHANGE_EMAIL_ENABLED=false
 export RABBITMQ_HOST=localhost
 export RABBITMQ_PORT=5673
 export RABBITMQ_USERNAME=booker_test
@@ -239,10 +258,11 @@ export BOOK_EVENTS_TEST_JDBC_URL="${DATABASE_URL}?user=${DATABASE_USERNAME}&pass
 Use a URL-safe test password or encode it for the JDBC query URL. Spring tests use
 the exported datasource; the low-level event test connects using its JDBC URL.
 Omitting `BOOK_EVENTS_TEST_JDBC_URL` skips that test. General Spring test contexts
-keep both email queues disabled; `RequestEmailRabbitIntegrationTest` and
-`PasswordResetEmailRabbitIntegrationTest` each enable their feature with an
-isolated schema/queue, exclude unrelated JobRunr setup for that schema, and use
-real RabbitMQ with mocked SMTP. Broker tests are required, not optional. Check Surefire reports rather
+keep all three email queues disabled; `RequestEmailRabbitIntegrationTest`,
+`PasswordResetEmailRabbitIntegrationTest` and `PasswordChangeEmailRabbitIntegrationTest`
+each enable their feature with an isolated schema/queue, exclude unrelated JobRunr setup for that schema, and use
+real RabbitMQ with mocked SMTP. `AuthHistoryIntegrationTest` also uses its own
+disposable schema to verify authorization, pagination and atomic login audit. Broker tests are required, not optional. Check Surefire reports rather
 than assuming a successful build exercised every case. Some PDF integration tests
 use their own `booker-*-tests` directories under the Java temp directory; use an
 isolated environment for concurrent suites and do not delete files owned by
@@ -291,6 +311,16 @@ is disabled. Current schema responsibilities:
 | V14 | Stable email receipt UUIDs, broker publication, delayed retries and failed-receipt state; preserves V13 content |
 | V15 | Successful password-reset history and account/time index; preserves accounts and pending tokens; pre-upgrade completion counts are unavailable, so existing accounts start at zero |
 | V16 | Encrypted recovery-email receipts, publication/retry/expiry indexes and lease ownership; preserves existing tokens/history; no retroactive email for pre-upgrade tokens |
+| V17 | Password-change account/workspace/context audit and leased confirmation outbox; preserves populated recovery state and sessions; no retroactive notifications |
+| V18 | Successful login history and cursor query indexes for login/password audit; preserves populated V17 audit/receipt/session data; no fabricated earlier logins |
+| V19 | Forward migration removes audit-to-workspace foreign keys to avoid reversed workspace/account lock ordering; preserves captured workspace UUIDs, audit/receipt rows and account deletion cascades |
+
+V18 is preserved at its original checksum `22842503`. If startup reports V18
+checksum mismatch with locally resolved `94587119`, update to the restored V18
+and new V19 files, then restart using your normal launch method. Flyway validates
+the original V18 and applies V19 normally; do not repair the checksum, disable
+validation, delete schema history or recreate the database for this mismatch.
+V19 preserves existing history/receipt data. No environment setting is needed.
 
 Back up before upgrades. V9 stops on duplicate exact workspace author/title pairs;
 resolve intentionally without merging book IDs/documents/progress:
@@ -391,6 +421,7 @@ See [recovery operations](password-reset-email-queue.md) and [proposed operation
 | Book request 429 | Check current UTC-month workspace history and Retry-After; review decisions do not restore slots |
 | Request/decision mail pending | Check RabbitMQ health/queue declarations, SMTP readiness, due/failed receipts and broker alarms |
 | Reset email 503 | Check SMTP readiness, PASSWORD_RESET_FROM and PASSWORD_RESET_EMAIL_ENCRYPTION_KEY; PASSWORD_RESET_URL is optional |
+| Password change 204 but no confirmation | Check PASSWORD_CHANGE_EMAIL_ENABLED, sender/SMTP, confirmation outbox and broker/worker health; 204 does not prove delivery |
 | Recovery 202 but no email | Check PASSWORD_RESET_EMAIL_ENABLED, reset outbox metadata, broker/consumer health, sender/key, token expiry/replacement, cooldown and monthly allowance; 202 does not prove delivery |
 | Reset returns 429 / recovery email stops | Check PASSWORD_RESET_MONTHLY_LIMIT and current UTC-month password_reset_history for that account; read Retry-After; forgot-password remains generic 202 at exhaustion |
 | SSE buffers or reconnects | Check proxy buffering/idle timeout, auth expiry and connection capacity |

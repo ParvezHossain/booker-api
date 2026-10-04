@@ -95,7 +95,7 @@ policy. Provider throttling may require longer configured delays.
 | `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD` | booker / no usable default password; Compose requires a nonempty password |
 | `RABBITMQ_VHOST` | `/`; isolate environments with distinct vhosts |
 | `RABBITMQ_SSL_ENABLED` | false locally; use true and the broker TLS port for production, with trusted certificates |
-| `RABBITMQ_HEALTH_ENABLED` | true; broker health is independent of both email pause flags |
+| `RABBITMQ_HEALTH_ENABLED` | true; broker health is independent of all email pause flags |
 | Compose `rabbitmq.mem_limit`, `rabbitmq.cpus` | Container limits: 512m / 1.0; customize through a Compose override for production capacity |
 | `BOOK_REQUEST_EMAIL_QUEUE` | booker.request-emails; all replicas in one deployment must share it |
 | `BOOK_REQUEST_EMAIL_POLL_MILLIS` | 1000; fixed delay after each bounded publisher pass |
@@ -182,7 +182,8 @@ stale-receipt recovery. Unit tests cover bounded publishing, broker failure and
 confirmation behavior; migration tests preserve pending V13 receipts.
 
 CI provides PostgreSQL 18 and RabbitMQ 4.2. General backend contexts set
-`BOOK_REQUEST_EMAIL_ENABLED=false` and `PASSWORD_RESET_EMAIL_ENABLED=false`; the broker integration test explicitly enables
+`BOOK_REQUEST_EMAIL_ENABLED=false`, `PASSWORD_RESET_EMAIL_ENABLED=false` and
+`PASSWORD_CHANGE_EMAIL_ENABLED=false`; the broker integration test explicitly enables
 the feature. No RabbitMQ tests are skipped to obtain a green build. Test databases
 and brokers must be disposable; live SMTP, production cluster failover and actual
 peak throughput still require deployment-specific verification.

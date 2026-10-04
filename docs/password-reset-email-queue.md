@@ -32,7 +32,9 @@ determine request latency; the API does not promise a fixed response time.
    transaction, then the listener acknowledges the broker message. Failure records
    a delayed retry or parked failure before acknowledgement. All state writes are
    conditional on lease ownership; an old worker cannot finalize another lease.
-6. The recipient submits the token and new password to reset-password. Existing
+6. The recipient submits the token and new password to reset-password. A successful
+   reset atomically queues a separate [password-change confirmation](password-change-notifications.md)
+   with the resetting request’s IP/browser/device audit. Existing
    expiry, single-use, replacement, session revocation and configurable monthly
    successful-reset allowance remain authoritative. Queueing/delivery does not
    consume that allowance.
@@ -52,7 +54,7 @@ runs must export `.env`; Maven does not load it automatically.
 | --- | --- |
 | `PASSWORD_RESET_EMAIL_ENCRYPTION_KEY` | Required for recovery acceptance; separate Base64-encoded 32-byte random AES key, generated with `openssl rand -base64 32`. Blank returns recovery 503; malformed nonblank values fail startup |
 | `PASSWORD_RESET_EMAIL_ENABLED` | true; false pauses publisher/listener while eligible requests still persist encrypted receipts and return 202 |
-| `PASSWORD_RESET_EMAIL_QUEUE` | booker.password-reset-emails; distinct from the book-request queue and both `.dead` names |
+| `PASSWORD_RESET_EMAIL_QUEUE` | booker.password-reset-emails; main/dead names distinct from request and password-change queues |
 | `PASSWORD_RESET_EMAIL_POLL_MILLIS` | 1000; fixed delay between bounded publishing passes |
 | `PASSWORD_RESET_EMAIL_BATCH_SIZE` | 20; range 1–100, bounds publication and stale-receipt cleanup per pass |
 | `PASSWORD_RESET_EMAIL_QUEUE_LIMIT` | 1000; range 1–100000, applies to main and `.dead` quorum queues |
@@ -60,7 +62,7 @@ runs must export `.env`; Maven does not load it automatically.
 | `PASSWORD_RESET_EMAIL_RETRY_SECONDS` | 30; range 1–3600, exponential delay capped at one hour |
 | `PASSWORD_RESET_EMAIL_REDISPATCH_SECONDS` | 300; range 30–86400, confirmed-publication recovery window |
 | `PASSWORD_RESET_EMAIL_LEASE_SECONDS` | 60; range 30–3600, bounds abandoned-worker ownership; set above expected SMTP send time |
-| `RABBITMQ_HEALTH_ENABLED` | true; broker health is independent of both email pause flags |
+| `RABBITMQ_HEALTH_ENABLED` | true; broker health is independent of all email pause flags |
 
 The same `RABBITMQ_*` connection/vhost/TLS settings as request email are reused.
 Recovery requires `SMTP_HOST`, provider credentials/options and `PASSWORD_RESET_FROM`.

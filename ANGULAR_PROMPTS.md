@@ -21,7 +21,7 @@ Review API.md sections 1–5 and 16–17. Inspect the Angular repository without
 
 Target stable Angular >=22 and Node 24. Verify exact official release compatibility; Node 24 must satisfy the selected Angular patch's engine requirements. Propose standalone feature boundaries, lazy routes, responsive accessible UI, typed API services, auth/refresh strategy, PDF transport, reading synchronization, and test strategy.
 
-Produce a route/access matrix for unauthenticated users, workspace owners and Super Admin; an endpoint-to-feature matrix covering all 43 business operations; likely files and dependency choices; and work itemd acceptance criteria. Treat health as optional operational integration, the denied legacy root as unsupported, and backend callback as browser navigation rather than an Angular API call.
+Produce a route/access matrix for unauthenticated users, workspace owners and Super Admin; an endpoint-to-feature matrix covering all 47 business operations; likely files and dependency choices; and work itemd acceptance criteria. Treat health as optional operational integration, the denied legacy root as unsupported, and backend callback as browser navigation rather than an Angular API call.
 
 Explicitly identify missing private update/delete, /me/role discovery, pagination, billing and signed URLs. Login tokens do not establish a documented frontend role claim. Propose separate user/admin entry flows with server-authoritative permissions rather than inventing role detection. Explain same-origin Drive cookie handoff and authenticated PDF Range requirements.
 
@@ -80,6 +80,13 @@ if needed. Forgot-password still returns generic 202 and sends no mail at exhaus
 do not infer allowance/delivery from it. Authenticated password changes do not count.
 
 Support pasting the emailed token when PASSWORD_RESET_URL is blank. If link delivery is configured, read the token from the agreed link query parameter and document that PASSWORD_RESET_URL must target this screen. Do not add a token lookup API. After a successful password change/reset invalidate local session state and require login. Avoid token leakage to logs, analytics and referrers; remove the reset token from browser history after capturing it for the form.
+
+
+The backend queues a security confirmation to the affected account after a successful
+change/reset and audits connection IP plus optional User-Agent/browser/device. A 204
+does not confirm SMTP delivery. Use normal client User-Agent behavior (an accurate
+app/platform agent may be supplied by Android); do not add recipient/workspace/IP
+selectors or send email from the client. Client metadata is untrusted and may be unknown.
 
 Test validation, incorrect current password, reset success/error, generic email confirmation and session cleanup. Run relevant checks.
 
@@ -208,6 +215,21 @@ Implement admin request list with exact optional uppercase status. Acceptance se
 Handle already-reviewed 409, validation/PDF/storage failures, forbidden access and multipart limits. Successful review is not proof that notification email was delivered. Refresh catalogue/request views after decisions; do not fetch private/workspace/progress APIs in admin mode.
 
 Test CRUD methods/payloads, raw-versus-multipart upload, metadata Blob content type, accept/reject conflicts, ambiguous decision reconciliation and 403 boundaries.
+
+### Account security history
+
+Read API.md section 7.2. Add workspace activity views using
+`/api/workspace/login-history` and `/api/workspace/password-change-history`, and
+Super Admin views using the corresponding `/api/admin/*-history` routes with an
+optional workspaceId filter. Backend authorization is authoritative; never redirect
+an own-workspace query using client identity selectors. Handle 403 without logging out.
+Consume {items,nextCursor}, limit 1–100 (default 50), UTC instants and nullable metadata.
+Preserve the endpoint/filter when following cursors; clear the cursor when changing
+filters and refresh page one for later arrivals. Do not invent total metrics from a
+page. Render User-Agent with normal escaped text binding, label browser/device as
+client-reported, and avoid activity-data logging/persistent caches. Test same-workspace
+accounts, owner/admin route separation, empty states, cursor errors and pagination.
+These UI requirements do not establish Angular implementation status in this repository.
 
 ## 15. UX polish, security and integration tests
 

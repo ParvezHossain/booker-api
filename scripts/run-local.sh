@@ -16,7 +16,8 @@ set +a
 
 : "${DATABASE_PASSWORD:?Set DATABASE_PASSWORD in .env}"
 : "${JWT_SECRET:?Set JWT_SECRET in .env}"
-if [[ "${BOOK_REQUEST_EMAIL_ENABLED:-true}" == true ]]; then
+if [[ "${BOOK_REQUEST_EMAIL_ENABLED:-true}" == true || "${PASSWORD_RESET_EMAIL_ENABLED:-true}" == true \
+    || "${PASSWORD_CHANGE_EMAIL_ENABLED:-true}" == true ]]; then
   : "${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}"
 fi
 

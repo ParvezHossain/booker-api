@@ -18,7 +18,7 @@ purpose of changes to existing classes before modifying them.
 | `drive` | Browser-bound OAuth, protected credentials and durable import worker |
 | `notification` | Workspace-scoped durable events and SSE delivery |
 | `library` email queue | Transactional outbox, confirmed bounded RabbitMQ publication, sequential SMTP delivery and delayed retries |
-| `auth` recovery email queue | Encrypted short-lived outbox, opaque RabbitMQ receipt IDs, lease ownership and SMTP outside database locks |
+| `auth` account email queues | Encrypted recovery outbox and password-change audit/confirmation outbox, opaque RabbitMQ receipt IDs, lease ownership and SMTP outside database locks |
 | `config`, `exception`, `security` | Security policy, OpenAPI, safe errors and token helpers |
 
 Keep controllers focused on HTTP concerns. Use constructor injection and immutable
@@ -102,6 +102,19 @@ opaque UUIDs go to the separate bounded recovery queue. SMTP runs outside transa
 claim/finalization use short transactions with lease ownership checks. Never let an
 old worker restore a replaced token or finalize a different lease. Acknowledge after
 completion/retry state commits; preserve delayed retries, parking and expiry cleanup.
+
+Password changes and successful recovery resets commit account/workspace/request-context
+audit plus a confirmation outbox receipt atomically with password/session updates.
+Recipients come from the affected account, never client selectors. Preserve bounded,
+untrusted User-Agent metadata and connection-IP provenance; do not trust forwarded
+headers without an explicit proxy trust boundary. SMTP remains outside transactions
+with fenced leases, delayed retries and persistent confirmed opaque-ID publication.
+Deleting delivered receipts must retain audit history. Successful credential login
+audit commits with token issuance; capture workspace IDs from the locked account
+without adding workspace locks in the account transaction. Failed attempts, refreshes
+and ordinary Basic/Bearer requests do not count as logins. History APIs authorize before cursor lookup: workspace
+accounts see only their authenticated workspace; only Super Admin may read/filter
+all workspaces. Preserve bounded cursor pages, explicit secret-free DTOs and no-store.
 
 ## Database and configuration
 

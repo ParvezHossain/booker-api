@@ -69,6 +69,11 @@ emailed token when resetting. No workspace/user/role selector is needed.
    New password must be nonblank and 12–64 characters. Invalid input or an invalid,
    expired or already-used token returns 400. Success consumes the token once and
    invalidates the account's previous access/refresh/reset tokens. Login is required.
+   Success also atomically records the resetting request's connection IP and optional
+   User-Agent/browser/device, then queues a security confirmation to the affected
+   account. A 204 confirms password replacement, not SMTP delivery. Keep the same JSON;
+   do not supply recipient/workspace/IP selectors or send email from Android.
+   See [confirmation behavior](password-change-notifications.md).
    Successful resets are capped per account per UTC calendar month, default 3,
    configured by backend `PASSWORD_RESET_MONTHLY_LIMIT`. A valid token submitted at
    the limit returns 429 `ApiError` plus integer `Retry-After` seconds until the next

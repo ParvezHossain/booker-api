@@ -47,6 +47,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/forgot-password", "/api/auth/reset-password").permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health", "/api/integrations/google-drive/callback", "/password-reset-token").permitAll()
                         .requestMatchers("/api/admin/public-book-requests/**", "/api/admin/public-book-requests").hasRole("SUPER_ADMIN")
+                        .requestMatchers("/api/admin/login-history", "/api/admin/password-change-history").hasRole("SUPER_ADMIN")
+                        .requestMatchers("/api/workspace/login-history", "/api/workspace/password-change-history").authenticated()
                         .requestMatchers("/api/public-book-requests").authenticated()
                         // Match progress before general PUT management: workspace users may save progress.
                         .requestMatchers(HttpMethod.POST, "/api/public-books", "/api/public-books/**").hasRole("SUPER_ADMIN")

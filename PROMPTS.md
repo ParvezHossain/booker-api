@@ -9,6 +9,8 @@ implemented. Priorities describe engineering sequencing, not committed release d
 ## Implemented baseline
 
 Workspace-isolated catalogues, JWT/Basic authentication, password management,
+password-change security confirmations, successful-login context audit and paginated
+workspace/Super Admin security history APIs,
 immutable PDFs, local storage, authenticated ranges, revisioned reading progress,
 Google Drive import, public library management, request review, shared ten-request UTC monthly submission quotas, bounded RabbitMQ request/decision email delivery and durable SSE/email
 receipts exist. CI runs Maven/PostgreSQL verification and Docker build validation.
@@ -272,7 +274,8 @@ checks run locally and in CI without exposing secrets or modifying files unexpec
 
 **Objective and limitation:** Recovery email has encrypted short-lived outbox receipts,
 bounded confirmed RabbitMQ publication, delayed retries and fenced lease completion;
-SMTP runs outside database transactions. Request/decision mail uses RabbitMQ and
+SMTP runs outside database transactions. Password-change confirmations also use
+short fenced leases and retain account/workspace/request-context audit after delivery. Request/decision mail uses RabbitMQ and
 bounded retries, but SMTP still holds a receipt transaction. Drive leases are 15
 minutes without a heartbeat/fencing token, so a slow worker may overlap a reclaim.
 

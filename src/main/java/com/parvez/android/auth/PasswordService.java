@@ -22,15 +22,18 @@ public class PasswordService {
     private final JdbcTemplate jdbc;
     private final PasswordEncoder passwords;
     private final PasswordResetDelivery delivery;
+    private final PasswordChangeNotifications notifications;
     private final Duration ttl;
     private final int monthlyLimit;
 
     public PasswordService(JdbcTemplate jdbc, PasswordEncoder passwords, PasswordResetDelivery delivery,
+            PasswordChangeNotifications notifications,
             @Value("${app.password-reset.ttl:PT30M}") Duration ttl,
             @Value("${app.password-reset.monthly-limit:3}") int monthlyLimit) {
         this.jdbc = jdbc;
         this.passwords = passwords;
         this.delivery = delivery;
+        this.notifications = notifications;
         this.ttl = ttl;
         this.monthlyLimit = monthlyLimit;
         if (ttl.isNegative() || ttl.isZero() || ttl.compareTo(Duration.ofHours(24)) > 0) {
@@ -42,11 +45,12 @@ public class PasswordService {
     }
 
     @Transactional
-    public void change(String email, String currentPassword, String newPassword) {
+    public void change(String email, String currentPassword, String newPassword, PasswordChangeContext context) {
         var hashes = jdbc.queryForList("SELECT password_hash FROM workspace_users WHERE email = ? FOR UPDATE", String.class, email);
         if (hashes.isEmpty() || !passwords.matches(currentPassword, hashes.getFirst()))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Current password is incorrect");
         replace(email, newPassword);
+        notifications.record(email, PasswordChangeNotifications.Source.CHANGE, context);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -74,7 +78,7 @@ public class PasswordService {
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public void reset(String token, String newPassword) {
+    public void reset(String token, String newPassword, PasswordChangeContext context) {
         String digest = OpaqueTokens.sha256Hex(token);
         var users = jdbc.queryForList("SELECT email FROM password_reset_tokens WHERE token_hash = ?", String.class, digest);
         if (users.isEmpty()) throw invalidToken();
@@ -93,6 +97,7 @@ public class PasswordService {
         replace(email, newPassword);
         jdbc.update("INSERT INTO password_reset_history (email, reset_at) VALUES (?, ?)",
                 email, Timestamp.from(usage.checkedAt()));
+        notifications.record(email, PasswordChangeNotifications.Source.RESET, context);
     }
 
     private MonthlyUsage monthlyUsage(String email) {

@@ -133,6 +133,115 @@ class BookReadingMigrationTest {
         });
     }
 
+    @Test void loginHistoryUpgradePreservesPopulatedPasswordAuditReceiptsAndSessions() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "17");
+            var jdbc = schema.jdbc();
+            String email = "history-upgrade@example.com";
+            UUID workspace = UUID.randomUUID();
+            UUID change = UUID.randomUUID();
+            jdbc.update("INSERT INTO workspaces(id,name) VALUES (?,'History upgrade')", workspace);
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,workspace_id) VALUES (?,'test-only',?)", email, workspace);
+            jdbc.update("INSERT INTO password_change_history(id,email,workspace_id,source,browser,device,user_agent,ip_address) VALUES (?,?,?,'CHANGE','Chrome','Computer / Linux','test agent','203.0.113.1')", change, email, workspace);
+            jdbc.update("INSERT INTO password_change_emails(id,attempts,failed_at) VALUES (?,2,clock_timestamp())", change);
+            jdbc.update("INSERT INTO refresh_tokens(token_hash,email,expires_at) VALUES (?,?,clock_timestamp()+interval '1 day')", "a".repeat(64), email);
+            var audit = jdbc.queryForList("SELECT * FROM password_change_history");
+            var receipts = jdbc.queryForList("SELECT * FROM password_change_emails");
+            var sessions = jdbc.queryForList("SELECT * FROM refresh_tokens");
+            migrate(schema.name(), null);
+            assertEquals(audit, jdbc.queryForList("SELECT * FROM password_change_history"));
+            assertEquals(receipts, jdbc.queryForList("SELECT * FROM password_change_emails"));
+            assertEquals(sessions, jdbc.queryForList("SELECT * FROM refresh_tokens"));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM login_history", Integer.class));
+            var indexes = jdbc.queryForList("SELECT indexname FROM pg_indexes WHERE schemaname=?", String.class, schema.name());
+            assertTrue(indexes.containsAll(java.util.List.of("login_history_recent", "login_history_workspace_recent",
+                    "login_history_account_recent", "password_change_history_recent", "password_change_history_workspace_recent")));
+            UUID login = UUID.randomUUID();
+            jdbc.update("INSERT INTO login_history(id,email,workspace_id,browser,device) VALUES (?,?,?,'Unknown','Unknown')", login, email, workspace);
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO login_history(id,email,browser,device) VALUES (?,'missing@example.com','Unknown','Unknown')", UUID.randomUUID()));
+            // Both histories retain captured workspace IDs without acquiring workspace FK locks.
+            jdbc.update("UPDATE workspace_users SET workspace_id=NULL,role='SUPER_ADMIN' WHERE email=?", email);
+            jdbc.update("DELETE FROM workspaces WHERE id=?", workspace);
+            assertEquals(workspace, jdbc.queryForObject("SELECT workspace_id FROM login_history WHERE id=?", UUID.class, login));
+            assertEquals(workspace, jdbc.queryForObject("SELECT workspace_id FROM password_change_history WHERE id=?", UUID.class, change));
+            jdbc.update("DELETE FROM workspace_users WHERE email=?", email);
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM login_history", Integer.class));
+            assertEquals(0, flyway(schema.name(), null).migrate().migrationsExecuted);
+        });
+    }
+
+    @Test void appliedV18ValidatesAndForwardUpgradePreservesBothHistoriesAndReceipts() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "18");
+            var jdbc = schema.jdbc();
+            assertEquals(22842503, jdbc.queryForObject("SELECT checksum FROM flyway_schema_history WHERE version='18'", Integer.class));
+            String email = "applied-v18@example.com";
+            UUID workspace = UUID.randomUUID(), login = UUID.randomUUID(), change = UUID.randomUUID();
+            jdbc.update("INSERT INTO workspaces(id,name) VALUES (?,'Applied V18')", workspace);
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,workspace_id) VALUES (?,'test-only',?)", email, workspace);
+            jdbc.update("INSERT INTO login_history(id,email,workspace_id,browser,device,ip_address,user_agent) VALUES (?,?,?,'Chrome','Computer / Linux','203.0.113.7','existing login')", login, email, workspace);
+            jdbc.update("INSERT INTO password_change_history(id,email,workspace_id,source,browser,device) VALUES (?,?,?,'RESET','Firefox','Computer / Linux')", change, email, workspace);
+            jdbc.update("INSERT INTO password_change_emails(id,attempts,failed_at) VALUES (?,2,clock_timestamp())", change);
+            var logins = jdbc.queryForList("SELECT * FROM login_history");
+            var changes = jdbc.queryForList("SELECT * FROM password_change_history");
+            var receipts = jdbc.queryForList("SELECT * FROM password_change_emails");
+            var appliedHistory = jdbc.queryForList("SELECT * FROM flyway_schema_history ORDER BY installed_rank");
+            flyway(schema.name(), "18").validate();
+            assertEquals(1, flyway(schema.name(), null).migrate().migrationsExecuted);
+            flyway(schema.name(), null).validate();
+            assertEquals(logins, jdbc.queryForList("SELECT * FROM login_history"));
+            assertEquals(changes, jdbc.queryForList("SELECT * FROM password_change_history"));
+            assertEquals(receipts, jdbc.queryForList("SELECT * FROM password_change_emails"));
+            assertEquals(appliedHistory, jdbc.queryForList("SELECT * FROM flyway_schema_history WHERE version <> '19' ORDER BY installed_rank"));
+            jdbc.update("UPDATE workspace_users SET workspace_id=NULL,role='SUPER_ADMIN' WHERE email=?", email);
+            jdbc.update("DELETE FROM workspaces WHERE id=?", workspace);
+            assertEquals(workspace, jdbc.queryForObject("SELECT workspace_id FROM login_history WHERE id=?", UUID.class, login));
+            assertEquals(workspace, jdbc.queryForObject("SELECT workspace_id FROM password_change_history WHERE id=?", UUID.class, change));
+            jdbc.update("DELETE FROM workspace_users WHERE email=?", email);
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM login_history", Integer.class));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_change_history", Integer.class));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_change_emails", Integer.class));
+            assertEquals(0, flyway(schema.name(), null).migrate().migrationsExecuted);
+        });
+    }
+
+    @Test void passwordChangeAuditUpgradePreservesRecoveryStateAndValidatesReceiptOwnership() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "16");
+            var jdbc = schema.jdbc();
+            String email = "change-upgrade@example.com";
+            UUID resetId = UUID.randomUUID();
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,role) VALUES (?,'test-only','SUPER_ADMIN')", email);
+            jdbc.update("INSERT INTO password_reset_tokens(email,token_hash,expires_at) VALUES (?,?,now()+interval '30 minutes')", email, "a".repeat(64));
+            jdbc.update("INSERT INTO password_reset_history(email,reset_at) VALUES (?,clock_timestamp())", email);
+            jdbc.update("INSERT INTO password_reset_emails(id,email,token_hash,encrypted_token,expires_at) VALUES (?,?,?,'test-only-ciphertext',now()+interval '30 minutes')", resetId, email, "a".repeat(64));
+            jdbc.update("INSERT INTO refresh_tokens(token_hash,email,expires_at) VALUES (?,?,now()+interval '1 day')", "b".repeat(64), email);
+            var accounts = jdbc.queryForList("SELECT * FROM workspace_users");
+            var tokens = jdbc.queryForList("SELECT * FROM password_reset_tokens");
+            var history = jdbc.queryForList("SELECT * FROM password_reset_history");
+            var receipts = jdbc.queryForList("SELECT * FROM password_reset_emails");
+            var sessions = jdbc.queryForList("SELECT * FROM refresh_tokens");
+            migrate(schema.name(), null);
+            assertEquals(accounts, jdbc.queryForList("SELECT * FROM workspace_users"));
+            assertEquals(tokens, jdbc.queryForList("SELECT * FROM password_reset_tokens"));
+            assertEquals(history, jdbc.queryForList("SELECT * FROM password_reset_history"));
+            assertEquals(receipts, jdbc.queryForList("SELECT * FROM password_reset_emails"));
+            assertEquals(sessions, jdbc.queryForList("SELECT * FROM refresh_tokens"));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_change_history", Integer.class));
+            UUID id = UUID.randomUUID();
+            jdbc.update("INSERT INTO password_change_history(id,email,source,browser,device) VALUES (?,?,'CHANGE','Unknown','Unknown')", id, email);
+            jdbc.update("INSERT INTO password_change_emails(id) VALUES (?)", id);
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("INSERT INTO password_change_emails(id) VALUES (?)", UUID.randomUUID()));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("UPDATE password_change_history SET source='OTHER' WHERE id=?", id));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("UPDATE password_change_emails SET lease_id=? WHERE id=?", UUID.randomUUID(), id));
+            jdbc.update("DELETE FROM password_change_emails WHERE id=?", id);
+            assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM password_change_history", Integer.class));
+            jdbc.update("DELETE FROM workspace_users WHERE email=?", email);
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_change_history", Integer.class));
+            assertEquals(0, flyway(schema.name(), null).migrate().migrationsExecuted);
+        });
+    }
+
     @Test void requestEmailUpgradePreservesQueuedDecisionsAndAllowsIndependentAdminReceipts() throws Exception {
         inSchema(schema -> {
             migrate(schema.name(), "12");

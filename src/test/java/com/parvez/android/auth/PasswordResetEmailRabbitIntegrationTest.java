@@ -124,7 +124,7 @@ class PasswordResetEmailRabbitIntegrationTest {
         assertNotNull(jdbc.queryForObject("SELECT published_at FROM password_reset_emails WHERE id=?", Timestamp.class, id));
         consumer.receive(message);
         assertEquals(0, remaining());
-        passwords.reset(token, "new-password-1234");
+        passwords.reset(token, "new-password-1234", PasswordChangeContext.unknown());
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM password_reset_history WHERE email=?", Integer.class, email));
     }
 
@@ -145,7 +145,7 @@ class PasswordResetEmailRabbitIntegrationTest {
                 jdbc.update("UPDATE password_reset_tokens SET requested_at=clock_timestamp()-interval '61 seconds' WHERE email=?", email);
                 UUID newer = pool.submit(() -> request(email)).get(3, TimeUnit.SECONDS);
                 assertNotEquals(oldId, newer);
-                assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> passwords.reset(oldToken, "new-password-1234"));
+                assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> passwords.reset(oldToken, "new-password-1234", PasswordChangeContext.unknown()));
                 release.countDown(); delivery.get(5, TimeUnit.SECONDS);
                 assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM password_reset_emails WHERE id=?", Integer.class, newer));
                 assertNotNull(token(newer));
@@ -162,7 +162,7 @@ class PasswordResetEmailRabbitIntegrationTest {
         jdbc.update("UPDATE password_reset_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE email=?", email);
         publisher.processPending(); assertEquals(0, remaining());
         jdbc.update("UPDATE password_reset_tokens SET requested_at=clock_timestamp()-interval '61 seconds' WHERE email=?", email);
-        current = request(email); passwords.reset(token(current), "new-password-1234");
+        current = request(email); passwords.reset(token(current), "new-password-1234", PasswordChangeContext.unknown());
         consumer.receive(new Message(current.toString().getBytes(StandardCharsets.US_ASCII), new MessageProperties()));
         assertEquals(0, remaining()); verifyNoInteractions(mail);
     }

@@ -28,7 +28,10 @@ separately.
 ## Capabilities
 
 - Workspace signup, JWT login/rotating refresh/logout, legacy Basic authentication,
-  password changes and emailed password recovery.
+  password changes and emailed password recovery, with security confirmations and
+  account/workspace audit history of IP and browser/device for successful logins and
+  password changes. Workspace accounts can page through their own history; Super Admin
+  can query every workspace.
 - Private book creation, numeric-ID lookup and exact author/title filtering, with
   configurable workspace quotas and operator-managed FREE/PRO entitlements.
 - PDF upload, immutable replacement, authenticated streaming/Range/HEAD and saved
@@ -39,7 +42,7 @@ separately.
   delivered sequentially with bounded retries.
 
 Billing, team invitations, email verification, private metadata editing/deletion,
-server pagination, object storage and mobile push are not implemented. Proposed
+catalogue/request pagination, object storage and mobile push are not implemented. Proposed
 work is tracked in [PROMPTS.md](PROMPTS.md).
 
 ## Architecture and stack
@@ -86,7 +89,7 @@ and an exposed JobRunr dashboard are not established by that dependency.
 
 ```text
 src/main/java/com/parvez/android/   Controllers, services and feature packages
-src/main/resources/                Environment-backed properties and Flyway V1–V16
+src/main/resources/                Environment-backed properties and Flyway V1–V19
 src/test/java/                     Unit, MVC, database and real HTTP tests
 .mvn/wrapper/                      Maven wrapper distribution configuration
 .github/workflows/                 Build, test and Docker validation
@@ -214,6 +217,7 @@ through exported variables or your deployment secret manager.
 | `GOOGLE_DRIVE_ENABLED` | false; optional integration |
 | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` | Optional initial provisioning pair |
 | `SMTP_HOST`, `PASSWORD_RESET_FROM`, `PASSWORD_RESET_URL` | Mail transport and sender; optional HTTPS reset page (blank URL emails a copyable token) |
+| `PASSWORD_CHANGE_EMAIL_FROM`, `PASSWORD_CHANGE_EMAIL_ENABLED` | Confirmation sender (blank falls back to PASSWORD_RESET_FROM); true enables a separate durable queue |
 | `PASSWORD_RESET_MONTHLY_LIMIT` | 3 successful resets per account per UTC calendar month; positive integer |
 | `PASSWORD_RESET_EMAIL_ENCRYPTION_KEY`, `PASSWORD_RESET_EMAIL_ENABLED` | Dedicated stable 32-byte Base64 key; true enables background RabbitMQ delivery |
 | `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source defaults to `http://localhost:4318/v1/metrics`; Compose sets an empty value |
@@ -222,8 +226,8 @@ Drive credentials, Picker configuration, remaining SMTP options and worker setti
 are documented in the [complete configuration reference](docs/operations.md#configuration).
 RabbitMQ host/credentials and bounded delivery settings are listed in the
 [request email queue guide](docs/request-email-queue.md#configuration). Broker delivery
-is enabled by default; `BOOK_REQUEST_EMAIL_ENABLED=false` pauses emails and keeps
-receipts pending, without a direct SMTP fallback.
+is enabled by default; `BOOK_REQUEST_EMAIL_ENABLED=false` pauses request/decision
+emails and keeps receipts pending, without a direct SMTP fallback.
 
 Keep the JWT key stable across restarts to retain valid sessions. Keep the separate
 Drive encryption key stable to retain access to stored connections. `.env` is
@@ -233,7 +237,7 @@ consumed by Compose, not automatically by Maven or the packaged application.
 
 - Interactive documentation: `http://localhost:8080/swagger-ui/index.html`.
 - OpenAPI JSON: `http://localhost:8080/v3/api-docs`.
-- Complete contracts and examples: [API.md](API.md), covering 43 business operations,
+- Complete contracts and examples: [API.md](API.md), covering 47 business operations,
   public health and the denied legacy root mapping.
 
 Create an account with `POST /api/auth/signup`, then log in with
@@ -272,7 +276,7 @@ Replace the example password before use. Signup requires a workspace name, a
 valid email and a 12–64 character password. Login returns the token pair.
 Books use numeric IDs; title and author are required, `publishedDate` is a
 required string, and the exact author/title pair is unique within its scope.
-List filters are exact matches and results are currently unpaginated.
+Catalogue filters are exact matches and catalogue results are currently unpaginated.
 
 | API area | Main routes | Access |
 | --- | --- | --- |
@@ -353,6 +357,17 @@ browser key is public and must have API/origin restrictions. Follow
 
 ### Email and password recovery
 
+Successful credential logins are recorded in PostgreSQL with request context.
+Workspace accounts can read `/api/workspace/login-history` and
+`/api/workspace/password-change-history`; Super Admin uses the corresponding
+`/api/admin/*-history` endpoints, with an optional workspace filter. Each endpoint
+uses bounded cursor pages and no-store responses. See [security history](docs/account-security-history.md).
+
+Every successful change/reset also queues a security confirmation to the affected
+account and records its workspace, time, connection IP and bounded browser/device
+metadata. Missing SMTP or paused delivery retains receipts without blocking changes.
+See [password change confirmations and audit](docs/password-change-notifications.md).
+
 Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, authentication
 and STARTTLS options, plus `PASSWORD_RESET_FROM`. Password recovery emails a copyable
 token when `PASSWORD_RESET_URL` is blank, suitable for Swagger or Android token entry.
@@ -406,9 +421,9 @@ are in [operations](docs/operations.md).
 
 ## Database and upgrades
 
-Flyway owns the V1–V16 migration sequence; Hibernate validates the resulting schema.
+Flyway owns the V1–V19 migration sequence; Hibernate validates the resulting schema.
 Tables cover workspaces/accounts, private/public books, immutable documents,
-scoped progress and retry receipts, refresh/reset secrets, successful-reset history and encrypted recovery receipts, Drive connections/jobs,
+scoped progress and retry receipts, refresh/reset secrets, successful-reset history, login history, password-change audit/confirmation receipts and encrypted recovery receipts, Drive connections/jobs,
 notifications, library requests, email receipts and file cleanup receipts.
 
 Fresh historical seed books belong to a reserved legacy workspace and have no
@@ -437,8 +452,8 @@ production. PDF validation is not antivirus scanning or a process sandbox.
 Integration tests require a **disposable PostgreSQL database** and RabbitMQ for
 the broker integration suite. Export test database
 credentials, an ephemeral JWT key and `BOOK_EVENTS_TEST_JDBC_URL`. Set test broker
-credentials and `BOOK_REQUEST_EMAIL_ENABLED=false` for general test contexts; the
-RabbitMQ integration suite enables its own isolated queues. Then run:
+credentials and set all three email delivery flags to false for general test contexts;
+the RabbitMQ integration suite enables its own isolated queues. Then run:
 
 ```sh
 ./mvnw -B clean verify
@@ -550,6 +565,8 @@ Feature and client references:
 - [Book requests and notification email outbox](docs/public-library-requests.md)
 - [RabbitMQ topology, bounded delivery, retries and recovery](docs/request-email-queue.md)
 - [Password management](docs/password-management.md)
+- [Password change confirmations and audit](docs/password-change-notifications.md)
+- [Account security history](docs/account-security-history.md)
 - [Workspace notifications](docs/book-notifications.md)
 - [Android specification](ANDROID_PROMPTS.md)
 - [Angular specification](ANGULAR_PROMPTS.md) and [client contribution rules](ANGULAR_AGENTS.md)
