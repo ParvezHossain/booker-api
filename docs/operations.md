@@ -39,7 +39,8 @@ Docker excludes secret files, stored PDFs and local tooling from its build conte
 | `SMTP_HOST`, `SMTP_PORT` | Blank host / 587; configure delivery provider |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | Backend-only provider credentials |
 | `SMTP_AUTH`, `SMTP_STARTTLS` | true / true; STARTTLS is required when enabled |
-| `PASSWORD_RESET_FROM` | Provider-approved sender; also used for administrator request and requester decision emails |
+| `PASSWORD_RESET_FROM` | Provider-approved password-reset sender; fallback sender for request mail |
+| `BOOK_REQUEST_EMAIL_FROM` | Request/decision sender; blank falls back to `PASSWORD_RESET_FROM`, then `SMTP_USERNAME`. Set explicitly if the SMTP username is not a provider-approved email address |
 | `PASSWORD_RESET_URL` | HTTPS client landing page, no fragment; reset token appended as query parameter |
 | `PASSWORD_RESET_TTL` | `PT30M`; positive, at most 24 hours |
 | `BOOK_REQUEST_EMAIL_ENABLED` | true; pauses publisher/listener when false, leaving receipts pending |

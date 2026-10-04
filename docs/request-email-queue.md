@@ -102,7 +102,13 @@ policy. Provider throttling may require longer configured delays.
 | `BOOK_REQUEST_EMAIL_RETRY_SECONDS` | 30; range 1–3600, exponential delay capped at one hour |
 | `BOOK_REQUEST_EMAIL_REDISPATCH_SECONDS` | 300; range 30–86400; recovery window after confirmed publication |
 
-Existing `SMTP_*` and `PASSWORD_RESET_FROM` settings remain required for actual mail.
+Actual delivery requires `SMTP_HOST` and the provider's `SMTP_*` credentials/options.
+The request sender uses the first nonblank value of `BOOK_REQUEST_EMAIL_FROM`,
+`PASSWORD_RESET_FROM`, and `SMTP_USERNAME`. Set `BOOK_REQUEST_EMAIL_FROM` to a
+provider-approved email address when the SMTP username is an API key or login name.
+A missing sender or mail bean pauses publication and logs a warning once per pause;
+receipts remain pending. Maven does not load `.env`: export the settings into the
+Java process environment; Compose passes the settings explicitly.
 With the feature disabled there is no fallback polling SMTP worker; pending emails
 wait until RabbitMQ delivery is enabled again. `books.requests.email.listener-auto-startup`
 is a Spring property defaulting to true; broker tests disable it to manage isolated
@@ -129,13 +135,21 @@ PostgreSQL can still grow under a sustained peak. Configure gateway limits, disk
 headroom, alerts and an operator backlog policy. Broker limits do not promise a
 particular throughput or eliminate all failure windows during consumer failover.
 
+A row in `public_request_emails` means delivery is pending or parked, not that an
+email has been sent. If `attempts=0` and `published_at` is null, check the feature
+flag, sender configuration warning, exported environment and broker connection.
+Previously a blank `PASSWORD_RESET_FROM` silently paused publication even when SMTP
+credentials were set. Request mail now falls back to `SMTP_USERNAME`; restart the
+updated backend with the intended environment to process existing pending receipts.
+Password-reset mail still requires its own `PASSWORD_RESET_FROM` setting.
+
 Inspect pending and parked work without exposing mail bodies:
 
 ```sql
 SELECT email_type, count(*) AS pending, min(created_at) AS oldest
 FROM public_request_emails WHERE failed_at IS NULL GROUP BY email_type;
 
-SELECT id, email_type, attempts, created_at, failed_at
+SELECT id, email_type, attempts, created_at, published_at, available_at, failed_at
 FROM public_request_emails WHERE failed_at IS NOT NULL ORDER BY failed_at;
 ```
 

@@ -33,7 +33,7 @@ class PublicRequestEmailDeliveryTest {
             ((Consumer<TransactionStatus>)invocation.getArgument(0)).accept(new SimpleTransactionStatus());
             return null;
         }).when(transaction).executeWithoutResult(any());
-        delivery = new PublicRequestEmailDelivery(jdbc,transaction,provider,"booker@example.com",settings);
+        delivery = new PublicRequestEmailDelivery(jdbc,transaction,provider,"booker@example.com","","",settings);
     }
     Map<String,Object> receipt(int attempts) {
         var row = new HashMap<String,Object>();
@@ -43,6 +43,30 @@ class PublicRequestEmailDeliveryTest {
     }
     void pending(Map<String,Object> row) { when(jdbc.queryForList(anyString(),eq(id))).thenReturn(List.of(row)); }
 
+    @Test void blankSenderSettingsUseSmtpUsernameToDeliverPendingReceipt() {
+        delivery = new PublicRequestEmailDelivery(jdbc,transaction,provider,"", "", "smtp@example.com",settings);
+        assertTrue(delivery.isConfigured());
+        pending(receipt(0)); delivery.deliver(id);
+        verify(sender).send(argThat((SimpleMailMessage message) -> "smtp@example.com".equals(message.getFrom())));
+        verify(jdbc).update("DELETE FROM public_request_emails WHERE id=?",id);
+    }
+    @Test void legacySenderTakesPrecedenceOverSmtpUsername() {
+        delivery = new PublicRequestEmailDelivery(jdbc,transaction,provider,"", "legacy@example.com", "smtp@example.com",settings);
+        pending(receipt(0)); delivery.deliver(id);
+        verify(sender).send(argThat((SimpleMailMessage message) -> "legacy@example.com".equals(message.getFrom())));
+    }
+    @Test void explicitRequestSenderTakesPrecedence() {
+        delivery = new PublicRequestEmailDelivery(jdbc,transaction,provider,"requests@example.com", "legacy@example.com", "smtp@example.com",settings);
+        pending(receipt(0)); delivery.deliver(id);
+        verify(sender).send(argThat((SimpleMailMessage message) -> "requests@example.com".equals(message.getFrom())));
+    }
+    @Test void allSenderSettingsBlankKeepReceiptPending() {
+        delivery = new PublicRequestEmailDelivery(jdbc,transaction,provider,"", "", "",settings);
+        assertFalse(delivery.isConfigured());
+        pending(receipt(0)); delivery.deliver(id);
+        verifyNoInteractions(sender);
+        verify(jdbc).update(contains("UPDATE public_request_emails"),eq(0),eq(30L),eq(false),eq(id));
+    }
     @Test void sendsDecisionAndDeletesOnlyItsReceipt() {
         pending(receipt(0)); delivery.deliver(id);
         verify(sender).send(argThat((SimpleMailMessage message) -> "reader@example.com".equals(message.getTo()[0]) && message.getText().contains("accepted")));

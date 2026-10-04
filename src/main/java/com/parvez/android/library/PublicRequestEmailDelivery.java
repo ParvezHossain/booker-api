@@ -28,10 +28,14 @@ public class PublicRequestEmailDelivery {
     private final RequestEmailSettings settings;
 
     public PublicRequestEmailDelivery(JdbcTemplate jdbc, TransactionTemplate transaction,
-            ObjectProvider<JavaMailSender> mail, @Value("${app.password-reset.from:}") String from,
+            ObjectProvider<JavaMailSender> mail, @Value("${books.requests.email.from:}") String requestFrom,
+            @Value("${app.password-reset.from:}") String passwordResetFrom,
+            @Value("${spring.mail.username:}") String smtpUsername,
             RequestEmailSettings settings) {
         this.jdbc = jdbc; this.transaction = transaction; this.mail = mail;
-        this.from = from; this.settings = settings;
+        this.from = !requestFrom.isBlank() ? requestFrom.strip()
+                : !passwordResetFrom.isBlank() ? passwordResetFrom.strip() : smtpUsername.strip();
+        this.settings = settings;
     }
 
     public boolean isConfigured() { return !from.isBlank() && mail.getIfAvailable() != null; }

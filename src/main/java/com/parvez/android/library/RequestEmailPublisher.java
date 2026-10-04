@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 @ConditionalOnProperty(name = "books.requests.email.enabled", havingValue = "true", matchIfMissing = true)
 public class RequestEmailPublisher {
     private static final Logger log = LoggerFactory.getLogger(RequestEmailPublisher.class);
+    private boolean configurationWarningLogged;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final RabbitTemplate rabbit;
@@ -36,7 +37,15 @@ public class RequestEmailPublisher {
     @Scheduled(scheduler = "requestEmailScheduler", fixedDelayString = "${books.requests.email-poll-millis:1000}",
             initialDelayString = "${books.requests.email-poll-millis:1000}")
     public void processPending() {
-        if (!delivery.isConfigured()) return;
+        if (!delivery.isConfigured()) {
+            if (!configurationWarningLogged) {
+                log.warn("Request email delivery paused: configure SMTP_HOST and BOOK_REQUEST_EMAIL_FROM "
+                        + "(or PASSWORD_RESET_FROM / SMTP_USERNAME); database receipts remain pending");
+                configurationWarningLogged = true;
+            }
+            return;
+        }
+        configurationWarningLogged = false;
         try {
             for (int i = 0; i < settings.batchSize(); i++) {
                 Boolean published = transaction.execute(status -> publishOne());
