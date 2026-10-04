@@ -215,8 +215,10 @@ request. Ambiguous review responses require status reconciliation before a retry
 acceptance does not have the upload idempotency contract.
 
 Add authenticated change-password and public forgot/reset flows using API.md.
-Handle generic 202 without account disclosure, capture the agreed HTTPS reset-link
-token, and clear old sessions after successful change/reset. Do not log links/tokens.
+Handle generic 202 without account disclosure. Support pasting the 43-character
+emailed token when PASSWORD_RESET_URL is blank; an HTTPS app link is optional.
+Submit {token,newPassword}, then clear old sessions after successful change/reset.
+Do not log links/tokens or claim the app-link handler exists until implemented.
 Test wrong/expired/replayed reset, session cleanup and admin/workspace access boundaries.
 
 ## Release acceptance

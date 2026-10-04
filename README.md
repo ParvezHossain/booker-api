@@ -194,7 +194,7 @@ through exported variables or your deployment secret manager.
 | `SSE_MAX_CONNECTIONS`, `SSE_POLL_MILLIS` | 200 connections per instance; 1000 ms polling |
 | `GOOGLE_DRIVE_ENABLED` | false; optional integration |
 | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` | Optional initial provisioning pair |
-| `SMTP_HOST`, `PASSWORD_RESET_FROM`, `PASSWORD_RESET_URL` | Optional email transport, sender and HTTPS reset landing page |
+| `SMTP_HOST`, `PASSWORD_RESET_FROM`, `PASSWORD_RESET_URL` | Mail transport and sender; optional HTTPS reset page (blank URL emails a copyable token) |
 | `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source defaults to `http://localhost:4318/v1/metrics`; Compose sets an empty value |
 
 Drive credentials, Picker configuration, remaining SMTP options and worker settings
@@ -333,8 +333,12 @@ browser key is public and must have API/origin restrictions. Follow
 ### Email and password recovery
 
 Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, authentication
-and STARTTLS options, plus `PASSWORD_RESET_FROM`. Password recovery additionally
-requires `PASSWORD_RESET_URL`, an HTTPS client landing page; reset tokens expire
+and STARTTLS options, plus `PASSWORD_RESET_FROM`. Password recovery emails a copyable
+token when `PASSWORD_RESET_URL` is blank, suitable for Swagger or Android token entry.
+Set an HTTPS client landing page to email a reset link instead. Reset emails include
+HTML and plain-text alternatives. Optional `PASSWORD_RESET_TOKEN_PAGE_URL` points
+to the backend `/password-reset-token` helper for a browser copy button; use a
+reachable HTTPS origin in production. Reset tokens expire
 after `PASSWORD_RESET_TTL` (default 30 minutes). Missing reset configuration
 returns 503. Request decisions commit independently of successful email delivery
 and use a durable PostgreSQL outbox plus RabbitMQ. New workspace book requests also enqueue
@@ -482,7 +486,7 @@ changing schema history or deleting volumes.
 | PDF upload rejected | Check size, MIME/extension, PDF content, page limits and writable storage |
 | Cross-workspace book returns 404 | Expected isolation; verify the authenticated account |
 | Drive callback fails | Check exact redirect URI, same-origin binding cookie and proxy forwarding |
-| Email unavailable or pending | Check SMTP, sender and HTTPS reset landing page where required |
+| Email unavailable or pending | Check SMTP and sender configuration; password-reset URL is optional |
 | Health returns 503 without SMTP | Check mail health; isolated environments without email can set `MANAGEMENT_HEALTH_MAIL_ENABLED=false` through external Spring configuration |
 | Email queue stalls | Check RabbitMQ health, queue declarations, SMTP configuration, parked receipts and broker alarms |
 | SSE messages delayed | Check proxy buffering, idle timeout and connection capacity |

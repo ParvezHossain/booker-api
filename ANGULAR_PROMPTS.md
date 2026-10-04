@@ -73,7 +73,7 @@ Test concurrent 401s, refresh failure, logout failure/local clearing, no bearer 
 
 Read API.md sections 6.5–6.7. Implement authenticated change-password, public forgot-password and emailed-link reset-password pages using exact documented request fields and constraints. Show the generic forgot-password response without exposing account existence. Handle 204 without JSON parsing and expired/used tokens safely.
 
-Read the reset token from the deployment's agreed link query parameter; document that PASSWORD_RESET_URL must target this screen. Do not add a token lookup API. After a successful password change/reset invalidate local session state and require login. Avoid token leakage to logs, analytics and referrers; remove the reset token from browser history after capturing it for the form.
+Support pasting the emailed token when PASSWORD_RESET_URL is blank. If link delivery is configured, read the token from the agreed link query parameter and document that PASSWORD_RESET_URL must target this screen. Do not add a token lookup API. After a successful password change/reset invalidate local session state and require login. Avoid token leakage to logs, analytics and referrers; remove the reset token from browser history after capturing it for the form.
 
 Test validation, incorrect current password, reset success/error, generic email confirmation and session cleanup. Run relevant checks.
 

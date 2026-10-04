@@ -36,7 +36,7 @@ public class PasswordController {
     @ApiResponse(responseCode = "400", description = "Invalid email", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @ApiResponse(responseCode = "503", description = "Email delivery not configured", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @PostMapping("/forgot-password")
-    @Operation(summary = "Request a password reset email", description = "Public. Always returns the same 202 message for registered/unregistered emails. Delivery is limited to once per account per minute. Invalid input: 400; email not configured: 503. Token expires after 30 minutes by default; token never returned by API.")
+    @Operation(summary = "Request a password reset email", description = "Public. Always returns the same 202 message for registered/unregistered emails. Delivery is limited to once per account per minute. Invalid input: 400; email not configured: 503. Token expires after 30 minutes by default; token never returned by API. With no PASSWORD_RESET_URL, email contains a token to copy into reset-password in Swagger or the app. A configured HTTPS URL sends a reset link instead.")
     public ResponseEntity<Message> forgot(@Valid @RequestBody Forgot request) {
         passwords.forgot(request.email());
         return ResponseEntity.accepted().cacheControl(CacheControl.noStore())
@@ -58,7 +58,7 @@ public class PasswordController {
     @Schema(name = "ForgotPasswordRequest")
     public record Forgot(@Schema(example = "owner@example.com") @NotBlank @Email @Size(max=254) String email) {}
     @Schema(name = "ResetPasswordRequest")
-    public record Reset(@Schema(description = "Single-use token from the emailed reset link", accessMode = Schema.AccessMode.WRITE_ONLY) @NotBlank @Pattern(regexp="[A-Za-z0-9_-]{43}") String token,
+    public record Reset(@Schema(description = "Single-use token copied from the email or its reset link", accessMode = Schema.AccessMode.WRITE_ONLY) @NotBlank @Pattern(regexp="[A-Za-z0-9_-]{43}") String token,
                         @Schema(format = "password", accessMode = Schema.AccessMode.WRITE_ONLY) @NotBlank @Size(min=12, max=64) String newPassword) {}
     public record Message(String message) {}
 }

@@ -41,7 +41,8 @@ Docker excludes secret files, stored PDFs and local tooling from its build conte
 | `SMTP_AUTH`, `SMTP_STARTTLS` | true / true; STARTTLS is required when enabled |
 | `PASSWORD_RESET_FROM` | Provider-approved password-reset sender; fallback sender for request mail |
 | `BOOK_REQUEST_EMAIL_FROM` | Request/decision sender; blank falls back to `PASSWORD_RESET_FROM`, then `SMTP_USERNAME`. Set explicitly if the SMTP username is not a provider-approved email address |
-| `PASSWORD_RESET_URL` | HTTPS client landing page, no fragment; reset token appended as query parameter |
+| `PASSWORD_RESET_URL` | Optional; blank emails a copyable token. If set, HTTPS client landing page, no fragment; reset token appended as query parameter |
+| `PASSWORD_RESET_TOKEN_PAGE_URL` | Optional reachable URL of the backend `/password-reset-token` helper; adds an email copy action using `#token`. HTTPS required except localhost/private IPv4 LAN development; no credentials, query or fragment |
 | `PASSWORD_RESET_TTL` | `PT30M`; positive, at most 24 hours |
 | `BOOK_REQUEST_EMAIL_ENABLED` | true; pauses publisher/listener when false, leaving receipts pending |
 | `RABBITMQ_HOST`, `RABBITMQ_PORT` | localhost / 5672; Compose uses rabbitmq / 5672 |
@@ -81,7 +82,15 @@ Google consent, provider restrictions or deployment cookie forwarding.
 
 ### SMTP and Super Admin
 
-Password reset requires mail transport, sender and HTTPS reset landing page.
+Password reset requires mail transport and sender. Leave `PASSWORD_RESET_URL` blank
+for emailed tokens that can be pasted into Swagger or an Android reset form;
+set an HTTPS client landing page to email reset links instead. Reset email includes
+HTML and plain-text alternatives. Set `PASSWORD_RESET_TOKEN_PAGE_URL` to the reachable
+backend `/password-reset-token` URL to add a copy-page button. The helper is public,
+uses no external scripts/analytics and never receives the token at the server.
+Use a public HTTPS origin in production. HTTP private-LAN testing may need manual
+copying when the browser blocks clipboard access. Email clients cannot reliably
+run clipboard scripts directly; the email action opens this helper in a browser.
 Book-request and decision emails need transport and the same sender, but not a reset landing page.
 SMTP operations have five-second connection/read/write timeouts. Missing reset
 configuration returns 503; request review still commits with email pending.
@@ -298,7 +307,7 @@ transaction. See [proposed operational improvements](../PROMPTS.md).
 | Drive callback 400 | Check exact callback, same-browser binding cookie, proxy routing and state expiry |
 | Drive/Picker unavailable | Check integration settings, grant status, project APIs and restricted key origins |
 | Request/decision mail pending | Check RabbitMQ health/queue declarations, SMTP readiness, due/failed receipts and broker alarms |
-| Reset email 503 | Check SMTP readiness, sender, reset URL where needed and pending receipts |
+| Reset email 503 | Check SMTP readiness and PASSWORD_RESET_FROM; PASSWORD_RESET_URL is optional |
 | SSE buffers or reconnects | Check proxy buffering/idle timeout, auth expiry and connection capacity |
 | Tests fail at context startup | Use disposable PostgreSQL, valid ephemeral JWT settings and writable temp storage |
 

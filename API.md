@@ -277,7 +277,7 @@ Endpoint examples and field tables below reference these reusable schemas. Array
 
 ## 5. Endpoint inventory
 
-**43 business operations**, plus Actuator health and one denied legacy root mapping: **45 method/path entries** below. Implicit framework HEAD/OPTIONS handling, Swagger assets and framework error dispatch are not additional business APIs. Each entry has a detailed section.
+**43 business operations**, plus the password-token copy page, Actuator health and one denied legacy root mapping: **46 method/path entries** below. Implicit framework HEAD/OPTIONS handling, Swagger assets and framework error dispatch are not additional business APIs. Each entry has a detailed section.
 
 | Method | Endpoint | Access | Purpose |
 | --- | --- | --- | --- |
@@ -288,6 +288,7 @@ Endpoint examples and field tables below reference these reusable schemas. Array
 | POST | `/api/auth/change-password` | Authenticated | Change password |
 | POST | `/api/auth/forgot-password` | No | Request password reset |
 | POST | `/api/auth/reset-password` | No | Reset password |
+| GET | `/password-reset-token` | No | Browser token copy helper (HTML) |
 | GET | `/api/workspace` | Workspace | Get current workspace |
 | GET | `/api/books` | Workspace | List or search private books |
 | GET | `/api/books/{bookId}` | Workspace | Get private book |
@@ -710,7 +711,7 @@ Content-Type: application/json
 
 **Business / implementation notes**
 
-Same 202 body for unknown/known emails and delivery failure. At most one issuance per account per minute; default expiry 30 minutes. Token is emailed, never returned. Cache-Control: no-store.
+Same 202 body for unknown/known emails and delivery failure. At most one issuance per account per minute; default expiry 30 minutes. Token is emailed, never returned. With `PASSWORD_RESET_URL` blank, the email contains a token to copy into Swagger or an Android reset form. With an HTTPS reset URL configured, the email contains a link with a `token` query parameter. Email includes UTF-8 HTML and plain-text alternatives. `PASSWORD_RESET_TOKEN_PAGE_URL` adds a link to the backend copy helper, with the token in a URL fragment (`#token=...`). SMTP and `PASSWORD_RESET_FROM` remain required. Cache-Control: no-store.
 
 ### 6.7 Reset password
 
@@ -769,6 +770,19 @@ Response Fields: None.
 **Business / implementation notes**
 
 Example token illustrates syntax only: use the actual emailed token. Single-use reset revokes all account sessions and reset tokens. Log in again. Cache-Control: no-store.
+
+### 6.8 Password reset token copy page
+
+Public `GET /password-reset-token` returns **200**, `Content-Type: text/html;charset=UTF-8`,
+`Cache-Control: no-store`, `Referrer-Policy: no-referrer`, a nonce-based restrictive
+Content-Security-Policy and `Permissions-Policy: clipboard-write=(self)`.
+It serves a browser helper, not a new token-retrieval or password-reset API.
+The browser reads `#token=<43-character-token>`, removes the fragment from history,
+and copies the token only after a button click. Fragments are not sent to the backend;
+query tokens are not read or reflected. Missing/malformed fragments disable copying.
+The page never verifies expiry, consumes a token or changes a password. If clipboard
+access is unavailable, it offers selected text for manual copying. No account login
+is needed. The existing POST reset endpoint still performs all validation.
 
 ## 7. Workspace
 
@@ -3495,7 +3509,7 @@ Mapping remains in controller and may appear in OpenAPI, but no successful publi
 2. Send access JWT on protected APIs; GET workspace returns plan/usage.
 3. Refresh once per expired session request group, replacing both tokens atomically. A concurrent refresh with the same old token loses with 401.
 4. Logout revokes one refresh token and clear client credentials. Change/reset password invalidates all earlier account sessions; log in again.
-5. Forgot-password returns a generic message; user follows emailed link, then client submits token/newPassword to reset-password. No reset-token fetch API exists.
+5. Forgot-password returns a generic message; user copies the emailed token (or opens the configured reset link), then client submits token/newPassword to reset-password. No reset-token fetch API exists.
 
 ### Private upload and reading
 
