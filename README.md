@@ -422,6 +422,8 @@ are in [operations](docs/operations.md).
 ## Database and upgrades
 
 Flyway owns the V1–V19 migration sequence; Hibernate validates the resulting schema.
+The 23 application tables and their creation/change versions are listed in the
+[table and migration map](docs/database-table-map.md).
 Tables cover workspaces/accounts, private/public books, immutable documents,
 scoped progress and retry receipts, refresh/reset secrets, successful-reset history, login history, password-change audit/confirmation receipts and encrypted recovery receipts, Drive connections/jobs,
 notifications, library requests, email receipts and file cleanup receipts.

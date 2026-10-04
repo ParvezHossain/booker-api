@@ -294,6 +294,11 @@ No registry publishing, deployment credentials or production deployment is confi
 Flyway migrations are immutable; Hibernate uses `ddl-auto=validate` and open-in-view
 is disabled. Current schema responsibilities:
 
+See the [table and migration map](database-table-map.md) for all 23 application
+tables, their dependencies and the reasons existing shared tables stay shared.
+Each table is created once; later migrations evolve populated schemas. A
+persistent development volume retains Flyway history across container restarts.
+
 | Migration | Responsibility |
 | --- | --- |
 | V1–V2 | Initial books and historical seed catalogue |

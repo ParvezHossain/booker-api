@@ -80,6 +80,9 @@ bearer secrets and digests; passwords use salted PBKDF2 instead of SHA-256.
 The migration sequence and populated-upgrade requirements are in
 [operations](operations.md#database-migrations-and-upgrades). No migration rollback
 files exist; coordinated backup restoration or a forward fix is required.
+The [table and migration map](database-table-map.md) lists every table separately
+and explains the book/document identities and outbox boundaries that constrain
+schema reorganization.
 
 ## Transaction and concurrency invariants
 

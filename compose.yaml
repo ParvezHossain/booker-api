@@ -8,6 +8,8 @@ services:
     ports:
       - '127.0.0.1:5432:5432'
     volumes:
+      # Keeps application data and applied Flyway history across container recreation.
+      # The app applies pending migrations on startup against this same database.
       - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U admin -d android']
