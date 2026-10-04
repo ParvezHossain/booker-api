@@ -109,7 +109,16 @@ class RequestEmailRabbitIntegrationTest {
         }).when(mail).send(any(MimeMessage.class));
         first=startConsumer();second=startConsumer();
         await(() -> first.getActiveConsumerCount()==1 && second.getActiveConsumerCount()==1);
-        for(int i=0;i<25;i++)submit();
+        for(int i=0;i<25;i++) {
+            // A peak can span workspaces; each workspace keeps its monthly quota.
+            if(i==10 || i==20) {
+                String email="peak-"+UUID.randomUUID()+"@example.com";
+                accounts.register(new WorkspaceAccounts.Signup("Peak workspace",email,"test-password-123"));
+                var owner=(WorkspacePrincipal)accounts.loadUserByUsername(email);
+                SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(owner,owner.getPassword(),owner.getAuthorities()));
+            }
+            submit();
+        }
         await(() -> { publisher.processPending();return remaining()==0; });
         assertEquals(25,sent.get());assertEquals(1,maximum.get());
     }

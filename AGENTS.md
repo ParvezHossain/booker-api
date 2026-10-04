@@ -72,6 +72,21 @@ networking or dependency-injection stack without a demonstrated need.
 - Keep OAuth browser binding, state expiry/single use, PKCE and account-bound encryption.
   Do not import arbitrary URLs or put backend secrets in client specifications/code.
 
+Workspace book requests are capped at ten successful creations per UTC calendar
+month across all workspace accounts and plans. Preserve workspace row locking,
+READ COMMITTED counts, post-lock database time and matching request `created_at`.
+All statuses count; invalid/duplicate/rolled-back requests do not. Do not bypass
+this invariant in another submission path, delete audit history to reset quota,
+or remove 429/Retry-After behavior and its CORS/OpenAPI documentation.
+
+Successful password recovery is capped per account per UTC calendar month by
+PASSWORD_RESET_MONTHLY_LIMIT (positive integer, default three). Preserve the account
+row lock, READ COMMITTED history counts, post-lock database time and atomic history/
+password/session updates. Email issuance, failed attempts, rollback and authenticated
+password changes do not count. Forgot-password remains generic 202 without issuance
+at exhaustion; valid-token reset returns 429/Retry-After while invalid tokens stay 400.
+Do not delete current-month password_reset_history to restore allowance.
+
 Request/decision email delivery keeps PostgreSQL authoritative. Publish only opaque
 receipt IDs, require persistent messages/confirmed mandatory routing, and preserve
 single-active-consumer, prefetch/concurrency 1 and bounded queues. Acknowledge only

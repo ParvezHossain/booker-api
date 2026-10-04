@@ -100,6 +100,9 @@ class OpenApiCoverageTest {
         var change = specification.path("paths").path("/api/auth/change-password").path("post");
         assertFalse(change.path("security").isEmpty());
         assertTrue(change.path("responses").has("204"));
+        var resetLimit = specification.path("paths").path("/api/auth/reset-password").path("post").path("responses").path("429");
+        assertEquals("#/components/schemas/ApiError", resetLimit.path("content").path("application/json").path("schema").path("$ref").asText());
+        assertEquals("integer", resetLimit.path("headers").path("Retry-After").path("schema").path("type").asText());
         var schemas = specification.path("components").path("schemas");
         assertTrue(schemas.path("LoginRequest").path("properties").path("password").path("writeOnly").asBoolean());
         assertTrue(schemas.path("ChangePasswordRequest").path("properties").path("newPassword").path("writeOnly").asBoolean());
@@ -134,6 +137,12 @@ class OpenApiCoverageTest {
         var conflict = specification.path("paths").path("/api/books/{bookId}/reading-progress").path("put")
                 .path("responses").path("409").path("content").path("application/json").path("schema").path("oneOf");
         assertEquals(2, conflict.size(), "Both revision and replaced-document error shapes must remain documented");
+    }
+
+    @Test void bookRequestMonthlyLimitDocuments429AndRetryAfter() {
+        var response=specification.path("paths").path("/api/public-book-requests").path("post").path("responses").path("429");
+        assertEquals("#/components/schemas/ApiError",response.path("content").path("application/json").path("schema").path("$ref").asText());
+        assertEquals("integer",response.path("headers").path("Retry-After").path("schema").path("type").asText());
     }
 
 }

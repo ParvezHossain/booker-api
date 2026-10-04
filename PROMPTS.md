@@ -10,7 +10,7 @@ implemented. Priorities describe engineering sequencing, not committed release d
 
 Workspace-isolated catalogues, JWT/Basic authentication, password management,
 immutable PDFs, local storage, authenticated ranges, revisioned reading progress,
-Google Drive import, public library management, request review, bounded RabbitMQ request/decision email delivery and durable SSE/email
+Google Drive import, public library management, request review, shared ten-request UTC monthly submission quotas, bounded RabbitMQ request/decision email delivery and durable SSE/email
 receipts exist. CI runs Maven/PostgreSQL verification and Docker build validation.
 Android/Angular requirements are separate [client](ANDROID_PROMPTS.md)
 [specifications](ANGULAR_PROMPTS.md); no client source is included here.
@@ -97,8 +97,11 @@ credentials fail; no account enumeration or self-promotion route is introduced.
 
 ### P1 — Rate limits for costly/public endpoints
 
-**Objective and limitation:** Reset issuance has a per-account cooldown, SSE/parsers have
+**Objective and limitation:** Reset issuance has a per-account cooldown and successful
+recovery has a configurable monthly account quota (default three); SSE/parsers have
 admission limits, but signup/login/reset/upload/import lack general abuse controls.
+The implemented ten-request UTC monthly workspace quota limits successful book
+submissions; it does not provide burst protection for rejected or unrelated traffic.
 
 **Requirements:** Define configurable anonymous/account/workspace policies and trusted
 proxy client-address rules. Bound expensive work before it starts; return documented 429

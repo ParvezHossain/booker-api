@@ -35,7 +35,7 @@ separately.
   reading position. Private progress is per account; public progress is per workspace.
 - Browser-bound Google Drive OAuth/Picker and queued PDF import into local storage.
 - Super Admin public catalogue management and workspace book requests with review,
-  durable SSE notifications and RabbitMQ-queued administrator/requester emails,
+  a shared 10-request UTC monthly quota, durable SSE notifications and queued administrator/requester emails,
   delivered sequentially with bounded retries.
 
 Billing, team invitations, email verification, private metadata editing/deletion,
@@ -86,7 +86,7 @@ and an exposed JobRunr dashboard are not established by that dependency.
 
 ```text
 src/main/java/com/parvez/android/   Controllers, services and feature packages
-src/main/resources/                Environment-backed properties and Flyway V1–V14
+src/main/resources/                Environment-backed properties and Flyway V1–V15
 src/test/java/                     Unit, MVC, database and real HTTP tests
 .mvn/wrapper/                      Maven wrapper distribution configuration
 .github/workflows/                 Build, test and Docker validation
@@ -143,19 +143,38 @@ in [operations](docs/operations.md).
 
 ### Run from source
 
+For repeated local starts, `bash scripts/run-local.sh` exports your trusted,
+shell-compatible `.env` before launching Maven and checks required secrets.
+Start PostgreSQL and RabbitMQ first with `docker compose up -d --wait postgres rabbitmq`.
+The equivalent manual steps are:
+
 ```sh
 docker compose up -d postgres rabbitmq
+# Load your trusted local .env into this shell (use shell-compatible assignments).
+set -a
+. ./.env
+set +a
 export DATABASE_URL='jdbc:postgresql://localhost:5432/android'
 export DATABASE_USERNAME='admin'
-# Export DATABASE_PASSWORD and RABBITMQ_PASSWORD with the values in .env.
-export RABBITMQ_HOST=localhost
-export RABBITMQ_USERNAME=booker
-export JWT_SECRET="$(openssl rand -base64 32)"
+export RABBITMQ_HOST=127.0.0.1
+export RABBITMQ_PORT=5672
 ./mvnw spring-boot:run
 ```
 
-Compose reads `.env`; Java/Maven do not. Export `DATABASE_PASSWORD` explicitly;
-there is no default database password. Keep the JWT key stable when retaining
+Compose reads `.env`; Java/Maven do not. The shell commands above export its values;
+set `DATABASE_PASSWORD`, `RABBITMQ_PASSWORD` and `JWT_SECRET` before running.
+`echo "$JWT_SECRET"` only proves that the current shell has a value; child processes
+receive it only after export. Use `bash scripts/run-local.sh` to load and export
+the local settings before launching the application.
+
+For IntelliJ's Run/Debug button, open **Run > Edit Configurations**, select the
+application configuration, and set `JWT_SECRET` and the other required settings in
+**Environment variables**. If the IDE supports loading an environment file, select
+the repository's trusted `.env` there. Fully stop and restart the application after
+changing its launch environment; exporting a variable in the IDE terminal does not
+update an existing Run/Debug configuration. Keep secrets out of shared run configurations.
+
+There is no default database password. Keep the JWT key stable when retaining
 sessions. Flyway applies pending migrations and Hibernate validates the schema
 on startup. Configuration, Google/SMTP setup and upgrade procedures are maintained
 in [docs/operations.md](docs/operations.md).
@@ -195,6 +214,7 @@ through exported variables or your deployment secret manager.
 | `GOOGLE_DRIVE_ENABLED` | false; optional integration |
 | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` | Optional initial provisioning pair |
 | `SMTP_HOST`, `PASSWORD_RESET_FROM`, `PASSWORD_RESET_URL` | Mail transport and sender; optional HTTPS reset page (blank URL emails a copyable token) |
+| `PASSWORD_RESET_MONTHLY_LIMIT` | 3 successful resets per account per UTC calendar month; positive integer |
 | `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source defaults to `http://localhost:4318/v1/metrics`; Compose sets an empty value |
 
 Drive credentials, Picker configuration, remaining SMTP options and worker settings
@@ -339,7 +359,15 @@ Set an HTTPS client landing page to email a reset link instead. Reset emails inc
 HTML and plain-text alternatives. Optional `PASSWORD_RESET_TOKEN_PAGE_URL` points
 to the backend `/password-reset-token` helper for a browser copy button; use a
 reachable HTTPS origin in production. Reset tokens expire
-after `PASSWORD_RESET_TTL` (default 30 minutes). Missing reset configuration
+after `PASSWORD_RESET_TTL` (default 30 minutes). Set `PASSWORD_RESET_MONTHLY_LIMIT`
+(default 3, positive integer) to cap successful recovery per account per UTC calendar
+month. Only completed resets count; emails and authenticated password changes do not.
+At exhaustion, forgot-password stays generic 202 without sending email; a valid token
+submitted to reset-password returns 429 with `Retry-After` until the next UTC month.
+Persisted history and the account lock enforce this across restarts and replicas.
+V15 starts existing accounts at zero recorded resets and preserves pending tokens.
+See [password recovery workflow](docs/password-management.md#monthly-successful-reset-allowance).
+Missing reset configuration
 returns 503. Request decisions commit independently of successful email delivery
 and use a durable PostgreSQL outbox plus RabbitMQ. New workspace book requests also enqueue
 an email to every provisioned Super Admin, using a professional HTML template
@@ -349,6 +377,13 @@ are reused. RabbitMQ publishes bounded batches and sends through one active
 consumer with prefetch 1, including across replicas. SMTP retries are delayed and
 stop after five failures by default; a full/unavailable broker retains pending
 receipts in PostgreSQL. See [queue operations and recovery](docs/request-email-queue.md).
+
+Workspace book requests are limited to **10 successfully created requests per UTC
+calendar month**, shared across workspace accounts and both plans. Pending and
+reviewed requests count; invalid, duplicate and rolled-back submissions do not.
+Exhaustion returns 429 with `Retry-After` seconds until the next UTC month. The
+backend enforces the quota across replicas using PostgreSQL workspace locks.
+See the [monthly request policy](docs/public-library-requests.md#monthly-workspace-request-limit).
 
 ### Super Admin and entitlements
 
@@ -366,9 +401,9 @@ are in [operations](docs/operations.md).
 
 ## Database and upgrades
 
-Flyway owns the V1–V14 migration sequence; Hibernate validates the resulting schema.
+Flyway owns the V1–V15 migration sequence; Hibernate validates the resulting schema.
 Tables cover workspaces/accounts, private/public books, immutable documents,
-scoped progress and retry receipts, refresh/reset secrets, Drive connections/jobs,
+scoped progress and retry receipts, refresh/reset secrets and successful-reset history, Drive connections/jobs,
 notifications, library requests, email receipts and file cleanup receipts.
 
 Fresh historical seed books belong to a reserved legacy workspace and have no
@@ -454,8 +489,8 @@ The included Compose file is a development baseline. Production deployment needs
 - Coordinated PostgreSQL/PDF backups, secure encryption-key retention and tested restores.
 - `/api` and OAuth callback routing before SPA fallback; preserved Authorization,
   Range and response headers; disabled SSE buffering and suitable stream timeouts.
-- Gateway limits for signup, login, recovery, upload and import; no general
-  application rate limiter is implemented.
+- Gateway limits for signup, login, recovery, upload and import; the book-request monthly quota is implemented, while a
+  general traffic rate limiter is not.
 - Monitoring for health, disk usage, database/event growth and worker failures.
 
 Only aggregate health is publicly exposed. Grafana/OTel in Compose is development
@@ -488,6 +523,8 @@ changing schema history or deleting volumes.
 | Drive callback fails | Check exact redirect URI, same-origin binding cookie and proxy forwarding |
 | Email unavailable or pending | Check SMTP and sender configuration; password-reset URL is optional |
 | Health returns 503 without SMTP | Check mail health; isolated environments without email can set `MANAGEMENT_HEALTH_MAIL_ENABLED=false` through external Spring configuration |
+| Password reset returns 429 | Account has used its configured successful-reset allowance for this UTC month; read Retry-After; forgot-password remains generic 202 |
+| Book request returns 429 | The workspace has used its 10 UTC monthly slots; read Retry-After for the reset delay |
 | Email queue stalls | Check RabbitMQ health, queue declarations, SMTP configuration, parked receipts and broker alarms |
 | SSE messages delayed | Check proxy buffering, idle timeout and connection capacity |
 

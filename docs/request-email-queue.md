@@ -11,7 +11,8 @@ Request submission/review still commits synchronously to PostgreSQL and returns
 the existing response; SMTP and broker availability do not determine HTTP success.
 PDF acceptance, Google imports, SSE events and password-reset email are not moved
 to RabbitMQ. This bounds email processing, not incoming HTTP/database traffic;
-gateway request limits remain necessary for sustained overload.
+book-request submission also has a shared ten-request UTC monthly quota. Gateway
+burst limits remain necessary for invalid/duplicate traffic and other routes.
 
 ```mermaid
 flowchart LR
@@ -89,11 +90,11 @@ policy. Provider throttling may require longer configured delays.
 | Variable | Default / purpose |
 | --- | --- |
 | `BOOK_REQUEST_EMAIL_ENABLED` | true; false pauses publisher/listener and disables Rabbit health; receipts remain pending |
-| `RABBITMQ_HOST`, `RABBITMQ_PORT` | localhost / 5672 in source mode; Compose fixes rabbitmq / 5672 |
+| `RABBITMQ_HOST`, `RABBITMQ_PORT` | 127.0.0.1 / 5672 in source mode; Compose fixes rabbitmq / 5672 |
 | `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD` | booker / no usable default password; Compose requires a nonempty password |
 | `RABBITMQ_VHOST` | `/`; isolate environments with distinct vhosts |
 | `RABBITMQ_SSL_ENABLED` | false locally; use true and the broker TLS port for production, with trusted certificates |
-| `RABBITMQ_MEMORY_LIMIT`, `RABBITMQ_CPU_LIMIT` | Compose-only container limits: 512m / 1.0; size production capacity separately |
+| Compose `rabbitmq.mem_limit`, `rabbitmq.cpus` | Container limits: 512m / 1.0; customize through a Compose override for production capacity |
 | `BOOK_REQUEST_EMAIL_QUEUE` | booker.request-emails; all replicas in one deployment must share it |
 | `BOOK_REQUEST_EMAIL_POLL_MILLIS` | 1000; fixed delay after each bounded publisher pass |
 | `BOOK_REQUEST_EMAIL_BATCH_SIZE` | 20; range 1–100 |
@@ -107,8 +108,8 @@ The request sender uses the first nonblank value of `BOOK_REQUEST_EMAIL_FROM`,
 `PASSWORD_RESET_FROM`, and `SMTP_USERNAME`. Set `BOOK_REQUEST_EMAIL_FROM` to a
 provider-approved email address when the SMTP username is an API key or login name.
 A missing sender or mail bean pauses publication and logs a warning once per pause;
-receipts remain pending. Maven does not load `.env`: export the settings into the
-Java process environment; Compose passes the settings explicitly.
+receipts remain pending. Maven does not load `.env`: use `scripts/run-local.sh`
+or configure the environment in the IDE; Compose passes the settings explicitly.
 With the feature disabled there is no fallback polling SMTP worker; pending emails
 wait until RabbitMQ delivery is enabled again. `books.requests.email.listener-auto-startup`
 is a Spring property defaulting to true; broker tests disable it to manage isolated
@@ -172,7 +173,7 @@ vhost and queue names. Separate deployments must not consume each other's IDs.
 
 `RequestEmailRabbitIntegrationTest` requires a real RabbitMQ broker plus disposable
 PostgreSQL. It creates an isolated schema and queues and cleans them up. SMTP is
-mocked. Tests cover a 25-email peak with two attached consumers and maximum observed
+mocked. Tests cover a 25-email peak across three workspaces with two attached consumers and maximum observed
 SMTP concurrency of one, full-queue rejection, delayed retries without blocking
 healthy mail, exhausted retries, duplicate tokens, malformed-token quarantine and
 stale-receipt recovery. Unit tests cover bounded publishing, broker failure and

@@ -85,7 +85,7 @@ Responses are direct objects/arrays without a common success envelope. IDs are n
 
 No endpoint implements page/size pagination or a client sort parameter. Lists return arrays with no total-count/total-pages envelope. Book lists support exact author/title filtering; admin book requests support exact status filtering. Request history is sorted by createdAt descending, summaries by numeric bookId ascending; book list order is not explicitly specified.
 
-Browser CORS defaults to `http://localhost:4200`, configurable with comma-separated `CORS_ALLOWED_ORIGINS`. Allowed methods: GET, HEAD, POST, PUT, DELETE. Allowed headers: Authorization, Cache-Control, Content-Type, Last-Event-ID, Range, If-Range, Idempotency-Key. Exposed headers: Content-Length, Content-Range, Accept-Ranges, Content-Disposition, ETag. Location is not in that exposure list. CORS configuration does not enable credentials; browser-based Drive cookie handoff should use the same-origin API/proxy flow. Native Android HTTP requests are not governed by browser CORS.
+Browser CORS defaults to `http://localhost:4200`, configurable with comma-separated `CORS_ALLOWED_ORIGINS`. Allowed methods: GET, HEAD, POST, PUT, DELETE. Allowed headers: Authorization, Cache-Control, Content-Type, Last-Event-ID, Range, If-Range, Idempotency-Key. Exposed headers: Content-Length, Content-Range, Accept-Ranges, Content-Disposition, ETag, Retry-After. Location is not in that exposure list. CORS configuration does not enable credentials; browser-based Drive cookie handoff should use the same-origin API/proxy flow. Native Android HTTP requests are not governed by browser CORS.
 
 ### HTTP statuses used by this implementation
 
@@ -106,6 +106,7 @@ Browser CORS defaults to `http://localhost:4200`, configurable with comma-separa
 | 413 | Private file limit or servlet multipart limit. |
 | 415 | Unsupported request media type or unsupported/unsafe PDF. |
 | 416 | Framework PDF range rejection. |
+| 429 | Workspace monthly book-request quota or account monthly password-reset allowance exhausted; Retry-After gives seconds until the next UTC month. |
 | 500 | Unhandled error with safe generic message. |
 | 503 | Storage/parser/SSE/Google availability/configuration, unconfigured reset email, unhealthy health endpoint. |
 
@@ -713,6 +714,12 @@ Content-Type: application/json
 
 Same 202 body for unknown/known emails and delivery failure. At most one issuance per account per minute; default expiry 30 minutes. Token is emailed, never returned. With `PASSWORD_RESET_URL` blank, the email contains a token to copy into Swagger or an Android reset form. With an HTTPS reset URL configured, the email contains a link with a `token` query parameter. Email includes UTF-8 HTML and plain-text alternatives. `PASSWORD_RESET_TOKEN_PAGE_URL` adds a link to the backend copy helper, with the token and its stored expiry in a URL fragment (`#token=...&expiresAt=<epoch-milliseconds>`). Email shows the expiry in `PASSWORD_RESET_TIME_ZONE` (default `Asia/Dhaka`); the copy helper displays the deadline in the browser’s local timezone and a live countdown. SMTP and `PASSWORD_RESET_FROM` remain required. Cache-Control: no-store.
 
+Accounts that have reached `PASSWORD_RESET_MONTHLY_LIMIT` successful resets in the
+current UTC calendar month (default 3 per account, including Super Admin) receive
+the same generic 202 without a new token or email. No 429 or allowance information
+is exposed by forgot-password. Requesting/resending email does not consume allowance;
+SMTP configuration errors still return 503 for all accounts.
+
 ### 6.7 Reset password
 
 **HTTP request**
@@ -766,10 +773,27 @@ Response Fields: None.
 | Status | Condition |
 | --- | --- |
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). Invalid, expired or already-used reset token; invalid fields. |
+| 429 | Valid token but account has reached the monthly successful-reset limit; Retry-After gives seconds until the next UTC month. |
 
 **Business / implementation notes**
 
 Example token illustrates syntax only: use the actual emailed token. Single-use reset revokes all account sessions and reset tokens. Log in again. Cache-Control: no-store.
+
+`PASSWORD_RESET_MONTHLY_LIMIT` is a positive integer, default **3 successful resets
+per account per UTC calendar month**, persisted across restarts and replicas.
+Only committed successful resets count; authenticated change-password, email
+issuance, invalid/expired/used tokens, SMTP failures and rollback do not. The account
+lock serializes checks and the successful history insert with password/session
+replacement. Month boundaries use post-lock database time in UTC; display timezones
+do not change the quota. Invalid/expired tokens remain 400 even at the limit.
+
+On 429, the response is `ApiError` with message
+`You can reset your password at most 3 times per UTC calendar month` (the number
+reflects configuration) and integer `Retry-After` seconds, rounded up to the next
+UTC month. Password, sessions and the submitted valid token remain unchanged.
+Clients must show the wait and avoid automatic retries; request a fresh email after
+the allowance renews if the token has expired. Existing accounts start at zero on
+the V15 upgrade because earlier reset completion history was not recorded.
 
 ### 6.8 Password reset token copy page
 
@@ -3100,6 +3124,29 @@ Content-Type: application/json
 | 401 | Missing/invalid authentication; security-filter body is not fixed. |
 | 403 | Workspace account required. |
 | 409 | Existing public book or duplicate pending title/authorName request in current workspace. |
+| 429 | Workspace already created 10 requests in this UTC calendar month; Retry-After gives seconds until the next month. |
+
+**Monthly limit response**
+
+```http
+HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+Retry-After: 86400
+```
+
+```json
+{
+  "dateTime": "2026-10-31T00:00:00",
+  "status": 429,
+  "error": "Too Many Requests",
+  "message": "Your workspace can submit at most 10 book requests per UTC calendar month",
+  "path": "/api/public-book-requests"
+}
+```
+
+`Retry-After` is an integer number of seconds, rounded up to the next UTC month;
+86400 is illustrative. `dateTime` uses the existing server-local error timestamp
+format and is not the reset timestamp.
 
 **Business / implementation notes**
 
@@ -3109,6 +3156,15 @@ The response does not wait for RabbitMQ publication or SMTP; a 201 confirms the 
 that notification email was delivered. Duplicate/invalid submissions create no
 additional email receipts. Without a provisioned Super Admin, the request still
 succeeds but no administrator email is queued.
+
+Maximum 10 successfully created requests per workspace per UTC calendar month,
+shared by all accounts and both FREE/PRO plans. All request statuses count, including
+reviewed requests. Duplicate, invalid and rolled-back submissions do not consume
+allowance. Existing current-month requests count on deployment; no manual counter
+reset is needed. Workspace locking and READ COMMITTED counts enforce the limit
+across parallel requests and replicas. A denied submission creates neither a request
+nor an email receipt. No quota-usage endpoint is implemented. See the
+[monthly policy](docs/public-library-requests.md#monthly-workspace-request-limit).
 
 ### 14.2 List workspace book requests
 
@@ -3548,7 +3604,7 @@ Only `drive.file` scope is requested. PKCE/state/browser binding protect the cal
 
 ### Public request review
 
-Workspace POST request → admin GET pending requests → admin accept with metadata/PDF or reject → workspace GET history / receive reviewed SSE event. Only PENDING can transition to ACCEPTED/REJECTED. Acceptance creates the public book atomically with decision; failures leave pending state. Committed submissions enqueue professional HTML/plain-text administrator request
+Workspace POST request (maximum 10 per UTC month) → admin GET pending requests → admin accept with metadata/PDF or reject → workspace GET history / receive reviewed SSE event. Only PENDING can transition to ACCEPTED/REJECTED. Acceptance creates the public book atomically with decision; failures leave pending state. Committed submissions enqueue professional HTML/plain-text administrator request
 notifications using persisted SUPER_ADMIN account emails, independent of bootstrap
 environment values. Committed decisions enqueue separate requester email for retryable SMTP delivery; synchronous review success is not proof of email delivery. The bounded publisher polls PostgreSQL every second by default and confirms durable
 RabbitMQ publication of opaque receipt IDs. A single active consumer with prefetch 1

@@ -11,6 +11,14 @@ provider. Copy `.env.example`, replace placeholders, and never commit secrets.
 Environment-specific `.env.*` files are ignored; the safe example remains tracked.
 Docker excludes secret files, stored PDFs and local tooling from its build context.
 
+If startup reports `Could not resolve placeholder 'JWT_SECRET'`, the Java process
+has not received that setting. A successful `echo "$JWT_SECRET"` in a terminal
+does not prove it is exported or available to an IDE launch. For source runs use
+`bash scripts/run-local.sh`, which loads and exports the trusted `.env`. For IDE
+runs set the variables in the application's Run/Debug configuration (or configure
+its environment-file support), then stop and restart the application. Do not
+commit credentials in shared IDE configurations or add a fallback signing key.
+
 | Variable | Default / requirement |
 | --- | --- |
 | `PORT` | 8080; source server port or Compose host mapping (container remains 8080) |
@@ -45,12 +53,14 @@ Docker excludes secret files, stored PDFs and local tooling from its build conte
 | `PASSWORD_RESET_TOKEN_PAGE_URL` | Optional reachable URL of the backend `/password-reset-token` helper; adds an email copy action using `#token`. HTTPS required except localhost/private IPv4 LAN development; no credentials, query or fragment |
 | `PASSWORD_RESET_TIME_ZONE` | `Asia/Dhaka`; IANA timezone for email expiry display, validated at startup. Browser copy page uses the device timezone |
 | `PASSWORD_RESET_TTL` | `PT30M`; positive, at most 24 hours |
+| `PASSWORD_RESET_MONTHLY_LIMIT` | `3`; positive integer, successful resets per account per UTC calendar month; validated at startup |
 | `BOOK_REQUEST_EMAIL_ENABLED` | true; pauses publisher/listener when false, leaving receipts pending |
-| `RABBITMQ_HOST`, `RABBITMQ_PORT` | localhost / 5672; Compose uses rabbitmq / 5672 |
+| `RABBITMQ_HOST`, `RABBITMQ_PORT` | 127.0.0.1 / 5672; Compose uses rabbitmq / 5672 |
 | `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD` | booker / required deployment secret; Compose requires nonempty password |
 | `RABBITMQ_VHOST`, `RABBITMQ_SSL_ENABLED` | `/` / false locally; use isolated vhosts and TLS in production |
 | `BOOK_REQUEST_EMAIL_*` delivery limits | See [queue settings](request-email-queue.md#configuration) for batch, capacity, retry and recovery defaults |
 | `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source default `http://localhost:4318/v1/metrics`; Compose supplies empty value |
+| `MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED` | true; set false locally when no OTLP metrics collector is running |
 
 ISO-8601 durations are used for token lifetimes. Spring DataSize units are used
 for byte limits. Compose binds PostgreSQL, RabbitMQ AMQP/management and Grafana/OTLP ports to loopback;
@@ -97,6 +107,16 @@ SMTP operations have five-second connection/read/write timeouts. Missing reset
 configuration returns 503; request review still commits with email pending.
 See [passwords](password-management.md) and [requests](public-library-requests.md).
 
+Password recovery permits `PASSWORD_RESET_MONTHLY_LIMIT` completed resets per account
+per UTC calendar month (default 3), persisted in `password_reset_history`. Email
+issuance and authenticated password changes do not consume it. At the limit,
+forgot-password keeps generic 202 without sending mail; a valid token submitted to
+reset-password returns 429 and `Retry-After` seconds until the next UTC month.
+Restart all replicas with the same positive limit after changing `.env`; source/IDE
+runs must export it. Email/browser timezone settings do not alter month boundaries.
+Do not delete current-month history to bypass the allowance. Invalid tokens and
+rolled-back/failed operations do not consume allowance.
+
 Provision Super Admin once using both bootstrap settings and a dedicated email.
 Startup will not reset an existing admin password or promote an owner. Remove
 bootstrap secrets after provisioning. New book requests resolve recipients from
@@ -106,14 +126,44 @@ Without any provisioned admin, requests succeed with a warning but no admin rece
 newly provisioned administrators do not receive past submission notifications. The normal login endpoint handles both roles;
 Super Admin cannot read private customer libraries and has no workspace progress.
 
+## Workspace book-request quota
+
+Book requests have a fixed shared limit of 10 successful submissions per UTC
+calendar month for every workspace/plan. No configuration or migration is needed:
+existing current-month history counts immediately and the V12 workspace/time index
+supports enforcement. 429 responses include `Retry-After`; all accounts in a
+workspace share the same allowance. Reviews and RabbitMQ retries do not reset or
+consume additional slots. See the [authoritative quota policy](public-library-requests.md#monthly-workspace-request-limit).
+
+Do not delete request history or rewrite `created_at` to bypass this limit; the
+same records are request audit and quota state. Backup restoration preserves the
+allowance. Gateway controls are still needed for invalid/duplicate requests and
+other traffic because a monthly product quota is not a burst limiter.
+
 ## RabbitMQ
 
 Compose adds RabbitMQ 4.2 management with a persistent `rabbitmq-data` volume,
+512m memory and 1.0 CPU limits (customize through a Compose override),
 health-gated backend startup and loopback-only ports 5672/15672. Set a strong
 `RABBITMQ_PASSWORD` before starting. Source mode must export the broker credentials;
 Java does not read `.env`. Queue delivery is enabled by default and aggregate health
 includes RabbitMQ. Broker outage does not roll back submitted requests: their
 receipts remain in PostgreSQL, but health can report unavailable infrastructure.
+
+For IDE/source runs, use `RABBITMQ_HOST=127.0.0.1` and `RABBITMQ_PORT=5672`.
+An existing `localhost` override can resolve to another loopback address where
+Compose does not publish AMQP. Restart the application after changing its run
+environment. Containers use the Compose service name `rabbitmq` instead.
+
+An `ACCESS_REFUSED` authentication failure means the broker was reached but
+rejected the login. Source/IDE runs must receive the same username and password
+as the broker; see [source startup](../README.md#run-from-source) for exporting
+a trusted local `.env`. Changing broker default credentials in `.env` does not
+update users already stored in the persistent RabbitMQ volume.
+
+Compose mounts `rabbitmq.conf` read-only to set the broker memory alarm at 256MiB,
+below the container memory limit. Use this file rather than the deprecated
+`RABBITMQ_VM_MEMORY_HIGH_WATERMARK` environment variable.
 
 Use a protected broker/vhost, TLS and production quorum-cluster capacity. All
 replicas must share queue names/vhost/database. There is no direct SMTP fallback
@@ -217,6 +267,7 @@ is disabled. Current schema responsibilities:
 | V12 | Public book requests, decision email receipts and typed events |
 | V13 | Typed per-recipient request/decision outbox receipts, subjects and optional HTML; preserves pending decision emails |
 | V14 | Stable email receipt UUIDs, broker publication, delayed retries and failed-receipt state; preserves V13 content |
+| V15 | Successful password-reset history and account/time index; preserves accounts and pending tokens; pre-upgrade completion counts are unavailable, so existing accounts start at zero |
 
 Back up before upgrades. V9 stops on duplicate exact workspace author/title pairs;
 resolve intentionally without merging book IDs/documents/progress:
@@ -266,7 +317,8 @@ WHERE id = 'replace-with-workspace-uuid';
 - Disable SSE buffering and permit five-minute streams; reconnects are expected.
   Stream authentication is checked at subscription, not continuously revalidated.
 - Enforce gateway limits on signup/login/reset/upload/import. There is no general
-  application rate limiter. Super Admin raw PDF upload bypasses private file/page/
+  traffic rate limiter; book-request submissions and successful password recovery
+  have monthly quotas. Super Admin raw PDF upload bypasses private file/page/
   storage quotas; set intentional infrastructure limits and monitor free disk.
 - Keep PDFs outside public web roots. The Docker runtime uses UID 10001; mounts
   must be writable by that account. LOCAL replicas need the same protected volume.
@@ -288,7 +340,9 @@ Expired refresh rows can be purged with:
 DELETE FROM refresh_tokens WHERE expires_at <= now();
 ```
 
-Reset rows can be purged when expired and outside the issuance cooldown. Events and
+Reset-token rows can be purged when expired and outside the issuance cooldown.
+Successful reset history has no automatic retention; preserve at least the complete
+current UTC month and the audit history required by your retention policy. Events and
 progress receipts have no automatic retention; deleting them needs a documented
 replay/idempotency policy. SMTP request/decision delivery is at least once; delayed retries allow healthy
 mail to proceed and exhausted failures require operator review. Monitor both broker
@@ -307,8 +361,10 @@ transaction. See [proposed operational improvements](../PROMPTS.md).
 | Cross-workspace 404 | Expected isolation; verify authenticated identity rather than adding workspace headers |
 | Drive callback 400 | Check exact callback, same-browser binding cookie, proxy routing and state expiry |
 | Drive/Picker unavailable | Check integration settings, grant status, project APIs and restricted key origins |
+| Book request 429 | Check current UTC-month workspace history and Retry-After; review decisions do not restore slots |
 | Request/decision mail pending | Check RabbitMQ health/queue declarations, SMTP readiness, due/failed receipts and broker alarms |
 | Reset email 503 | Check SMTP readiness and PASSWORD_RESET_FROM; PASSWORD_RESET_URL is optional |
+| Reset returns 429 / recovery email stops | Check PASSWORD_RESET_MONTHLY_LIMIT and current UTC-month password_reset_history for that account; read Retry-After; forgot-password remains generic 202 at exhaustion |
 | SSE buffers or reconnects | Check proxy buffering/idle timeout, auth expiry and connection capacity |
 | Tests fail at context startup | Use disposable PostgreSQL, valid ephemeral JWT settings and writable temp storage |
 

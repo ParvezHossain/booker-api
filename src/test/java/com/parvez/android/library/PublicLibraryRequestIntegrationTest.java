@@ -162,6 +162,89 @@ class PublicLibraryRequestIntegrationTest {
         authenticate(owner);
         assertEquals("PENDING",requests.own().stream().filter(r -> r.id().equals(request.id())).findFirst().orElseThrow().status());
     }
+    @Test void monthlyLimitAllowsTenThenReturns429WithRetryHeaderWithoutQueuingMoreMail() throws Exception {
+        for (int i=0;i<10;i++) submit();
+        long emails=jdbc.queryForObject("SELECT count(*) FROM public_request_emails e JOIN public_library_book_requests r ON r.id=e.request_id WHERE r.workspace_id=?",Long.class,ownerWorkspace());
+        mvc.perform(post("/api/public-book-requests").with(user(owner)).header("Origin","http://localhost:4200")
+                .contentType("application/json").content("{\"title\":\"Eleventh\",\"authorName\":\"Author\"}"))
+                .andExpect(status().isTooManyRequests()).andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.error").value("Too Many Requests"))
+                .andExpect(jsonPath("$.message").value("Your workspace can submit at most 10 book requests per UTC calendar month"))
+                .andExpect(header().string("Retry-After",org.hamcrest.Matchers.matchesPattern("[1-9][0-9]*")))
+                .andExpect(header().string("Access-Control-Expose-Headers",org.hamcrest.Matchers.containsString("Retry-After")));
+        assertEquals(10,jdbc.queryForObject("SELECT count(*) FROM public_library_book_requests WHERE workspace_id=?",Integer.class,ownerWorkspace()));
+        assertEquals(emails,jdbc.queryForObject("SELECT count(*) FROM public_request_emails e JOIN public_library_book_requests r ON r.id=e.request_id WHERE r.workspace_id=?",Long.class,ownerWorkspace()));
+        authenticate(other);assertDoesNotThrow(() -> requests.submit(new PublicLibraryRequestService.Submit("Other allowance","Author")));
+    }
+
+    UUID ownerWorkspace() { authenticate(owner);return WorkspacePrincipal.currentWorkspace(); }
+
+    @Test void monthlyLimitIsSharedByWorkspaceAccountsAndIndependentOfPlanOrDecision() {
+        var workspace=ownerWorkspace();
+        String teammate="teammate-"+UUID.randomUUID()+"@example.com";
+        accounts.register(new WorkspaceAccounts.Signup("Unused teammate workspace",teammate,"test-password-123"));
+        jdbc.update("UPDATE workspace_users SET workspace_id=? WHERE email=?",workspace,teammate);
+        var sameWorkspace=(WorkspacePrincipal)accounts.loadUserByUsername(teammate);
+        for(int i=0;i<10;i++) {
+            var request=submit();authenticate(admin);requests.reject(request.id());
+        }
+        jdbc.update("UPDATE workspaces SET plan='PRO',book_limit=10000 WHERE id=?",workspace);
+        authenticate(sameWorkspace);
+        var failure=assertThrows(BookRequestLimitExceededException.class,
+                () -> requests.submit(new PublicLibraryRequestService.Submit("Shared allowance","Author")));
+        assertEquals(429,failure.getStatusCode().value());
+    }
+
+    @Test void duplicateAndRolledBackRequestsDoNotConsumeMonthlySlots() throws Exception {
+        var first=submit();authenticate(owner);
+        for(int i=0;i<3;i++) {
+            var failure=assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                    () -> requests.submit(new PublicLibraryRequestService.Submit(first.title(),first.authorName())));
+            assertEquals(409,failure.getStatusCode().value());
+        }
+        transaction.executeWithoutResult(status -> {
+            requests.submit(new PublicLibraryRequestService.Submit("Rolled back allowance","Author"));status.setRollbackOnly();
+        });
+        mvc.perform(post("/api/public-book-requests").with(user(owner)).contentType("application/json").content("{}"))
+                .andExpect(status().isBadRequest());
+        for(int i=0;i<9;i++)submit();authenticate(owner);
+        assertThrows(BookRequestLimitExceededException.class,
+                () -> requests.submit(new PublicLibraryRequestService.Submit("No remaining slots","Author")));
+        assertEquals(10,jdbc.queryForObject("SELECT count(*) FROM public_library_book_requests WHERE workspace_id=?",Integer.class,ownerWorkspace()));
+    }
+
+    @Test void previousMonthDoesNotConsumeCurrentAllowanceAndRetryResetsAtUtcMonthBoundary() {
+        var workspace=ownerWorkspace();
+        for(int i=0;i<10;i++)submit();
+        jdbc.update("UPDATE public_library_book_requests SET created_at=(date_trunc('month',clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')-interval '1 second' WHERE workspace_id=?",workspace);
+        for(int i=0;i<10;i++)submit();authenticate(owner);
+        var failure=assertThrows(BookRequestLimitExceededException.class,
+                () -> requests.submit(new PublicLibraryRequestService.Submit("Current month eleventh","Author")));
+        long retry=Long.parseLong(failure.getHeaders().getFirst("Retry-After"));
+        long expected=jdbc.queryForObject("SELECT ceil(extract(epoch from ((date_trunc('month',clock_timestamp() AT TIME ZONE 'UTC')+interval '1 month') AT TIME ZONE 'UTC')-clock_timestamp()))",Long.class);
+        assertTrue(Math.abs(retry-expected)<=2);
+        assertEquals(20,jdbc.queryForObject("SELECT count(*) FROM public_library_book_requests WHERE workspace_id=?",Integer.class,workspace));
+    }
+
+    @Test void concurrentSubmissionsCannotExceedMonthlyLimit() throws Exception {
+        var workspace=ownerWorkspace();
+        try(var executor=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var futures=new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for(int i=0;i<15;i++)futures.add(executor.submit(() -> {
+                authenticate(owner);
+                try {
+                    requests.submit(new PublicLibraryRequestService.Submit("Concurrent quota "+UUID.randomUUID(),"Author"));return true;
+                } catch(BookRequestLimitExceededException failure) {
+                    assertEquals(429,failure.getStatusCode().value());return false;
+                } finally {SecurityContextHolder.clearContext();}
+            }));
+            int successful=0;for(var future:futures)if(future.get())successful++;
+            assertEquals(10,successful);
+        }
+        assertEquals(10,jdbc.queryForObject("SELECT count(*) FROM public_library_book_requests WHERE workspace_id=?",Integer.class,workspace));
+        assertEquals(10,jdbc.queryForObject("SELECT count(*) FROM public_request_emails e JOIN public_library_book_requests r ON r.id=e.request_id WHERE r.workspace_id=? AND e.recipient=?",Integer.class,workspace,admin.getUsername()));
+    }
+
     MockMultipartFile metadata() {
         return new MockMultipartFile("metadata","","application/json","{\"publishedDate\":\"2026\",\"description\":\"Review\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }

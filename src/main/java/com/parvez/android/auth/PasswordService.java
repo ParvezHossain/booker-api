@@ -6,10 +6,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.sql.Timestamp;
 import java.util.Locale;
 
 /** Password workflows and atomic session revocation, independent of email transport. */
@@ -19,15 +23,21 @@ public class PasswordService {
     private final PasswordEncoder passwords;
     private final PasswordResetDelivery delivery;
     private final Duration ttl;
+    private final int monthlyLimit;
 
     public PasswordService(JdbcTemplate jdbc, PasswordEncoder passwords, PasswordResetDelivery delivery,
-            @Value("${app.password-reset.ttl:PT30M}") Duration ttl) {
+            @Value("${app.password-reset.ttl:PT30M}") Duration ttl,
+            @Value("${app.password-reset.monthly-limit:3}") int monthlyLimit) {
         this.jdbc = jdbc;
         this.passwords = passwords;
         this.delivery = delivery;
         this.ttl = ttl;
+        this.monthlyLimit = monthlyLimit;
         if (ttl.isNegative() || ttl.isZero() || ttl.compareTo(Duration.ofHours(24)) > 0) {
             throw new IllegalArgumentException("Password reset lifetime must be positive and at most 24 hours");
+        }
+        if (monthlyLimit < 1) {
+            throw new IllegalArgumentException("Password reset monthly limit must be positive");
         }
     }
 
@@ -39,7 +49,7 @@ public class PasswordService {
         replace(email, newPassword);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void forgot(String input) {
         if (!delivery.isConfigured()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Password reset email is not configured");
@@ -47,6 +57,8 @@ public class PasswordService {
         String email = input.strip().toLowerCase(Locale.ROOT);
         var users = jdbc.queryForList("SELECT email FROM workspace_users WHERE email = ? FOR UPDATE", String.class, email);
         if (users.isEmpty()) return;
+        // Preserve the generic public response without issuing unusable recovery emails.
+        if (monthlyUsage(email).used() >= monthlyLimit) return;
         String token = OpaqueTokens.random();
         var issued = jdbc.query("""
                 INSERT INTO password_reset_tokens (email, token_hash, expires_at)
@@ -64,7 +76,7 @@ public class PasswordService {
         }
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void reset(String token, String newPassword) {
         String digest = OpaqueTokens.sha256Hex(token);
         var users = jdbc.queryForList("SELECT email FROM password_reset_tokens WHERE token_hash = ?", String.class, digest);
@@ -72,10 +84,36 @@ public class PasswordService {
         String email = users.getFirst();
         // Same lock order as login, refresh, change and forgot, preventing token issuance races.
         jdbc.queryForList("SELECT email FROM workspace_users WHERE email = ? FOR UPDATE", email);
-        int consumed = jdbc.update("DELETE FROM password_reset_tokens WHERE email = ? AND token_hash = ? AND expires_at > now()", email, digest);
+        var usage = monthlyUsage(email);
+        int consumed = jdbc.update("DELETE FROM password_reset_tokens WHERE email = ? AND token_hash = ? AND expires_at > ?",
+                email, digest, Timestamp.from(usage.checkedAt()));
         if (consumed != 1) throw invalidToken();
+        // Validate the token before revealing account-specific quota information. Any
+        // rejection rolls back consumption, leaving the password and sessions intact.
+        if (usage.used() >= monthlyLimit) {
+            throw new PasswordResetLimitExceededException(monthlyLimit, usage.checkedAt(), usage.resetsAt());
+        }
         replace(email, newPassword);
+        jdbc.update("INSERT INTO password_reset_history (email, reset_at) VALUES (?, ?)",
+                email, Timestamp.from(usage.checkedAt()));
     }
+
+    private MonthlyUsage monthlyUsage(String email) {
+        // Call only while holding the account lock. A waiter may cross a month
+        // boundary, so use database time after locking, rather than transaction now().
+        Instant checkedAt = jdbc.queryForObject("SELECT clock_timestamp()", Timestamp.class).toInstant();
+        var start = checkedAt.atZone(ZoneOffset.UTC).toLocalDate().withDayOfMonth(1).atStartOfDay(ZoneOffset.UTC);
+        Instant resetsAt = start.plusMonths(1).toInstant();
+        int used = jdbc.queryForObject("""
+                SELECT count(*) FROM (
+                    SELECT 1 FROM password_reset_history
+                    WHERE email = ? AND reset_at >= ? AND reset_at < ? LIMIT ?
+                ) monthly_resets
+                """, Integer.class, email, Timestamp.from(start.toInstant()), Timestamp.from(resetsAt), monthlyLimit);
+        return new MonthlyUsage(checkedAt, resetsAt, used);
+    }
+
+    private record MonthlyUsage(Instant checkedAt, Instant resetsAt, int used) {}
 
     private void replace(String email, String password) {
         jdbc.update("UPDATE workspace_users SET password_hash = ?, credential_version = credential_version + 1 WHERE email = ?",

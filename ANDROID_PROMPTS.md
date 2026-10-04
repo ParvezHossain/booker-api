@@ -208,6 +208,10 @@ Use the existing public APIs with explicit private/public reader context. Public
 progress is shared by a workspace and labeled accordingly; Super Admin previews
 PDFs without workspace progress. Ordinary users cannot manage the global catalogue.
 Submit requests as `{title, authorName}` and display workspace request history.
+Handle the shared workspace limit of ten successful requests per UTC calendar month.
+On 429, show the backend message/reset delay from Retry-After; avoid automatic
+submission retries until the delay expires. Reviews do not restore allowance and
+local history counts must not override backend enforcement.
 The backend queues Super Admin notification email through a PostgreSQL outbox and RabbitMQ on submission; success does not
 confirm delivery. Clients must not send emails or provide administrator recipients.
 Admin acceptance uses multipart `metadata` and `file`; title/author come from the
@@ -218,8 +222,14 @@ Add authenticated change-password and public forgot/reset flows using API.md.
 Handle generic 202 without account disclosure. Support pasting the 43-character
 emailed token when PASSWORD_RESET_URL is blank; an HTTPS app link is optional.
 Submit {token,newPassword}, then clear old sessions after successful change/reset.
+Handle reset 429 as a per-account successful-reset quota (default three per UTC
+calendar month, configurable on the backend); show the message and Retry-After
+seconds and avoid automatic retries. After renewal a fresh email may be required.
+Forgot-password stays generic 202 without email at exhaustion; 202 does not prove
+delivery or remaining allowance. Authenticated change-password does not count.
 Do not log links/tokens or claim the app-link handler exists until implemented.
-Test wrong/expired/replayed reset, session cleanup and admin/workspace access boundaries.
+Test wrong/expired/replayed reset, monthly 429, generic quota-exhausted 202,
+session cleanup and admin/workspace access boundaries.
 
 ## Release acceptance
 

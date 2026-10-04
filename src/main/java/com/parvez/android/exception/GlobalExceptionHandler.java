@@ -99,7 +99,9 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ApiError> handleResponseStatus(ResponseStatusException exception, HttpServletRequest request) {
-        return buildError(HttpStatus.valueOf(exception.getStatusCode().value()), exception.getReason(), request);
+        var response = buildError(HttpStatus.valueOf(exception.getStatusCode().value()), exception.getReason(), request);
+        return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
+                .headers(exception.getHeaders()).body(response.getBody());
     }
 
     @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)

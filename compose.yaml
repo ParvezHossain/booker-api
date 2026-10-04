@@ -17,17 +17,26 @@ services:
 
   rabbitmq:
     image: rabbitmq:4.2-management
-    mem_limit: ${RABBITMQ_MEMORY_LIMIT:-512m}
-    cpus: ${RABBITMQ_CPU_LIMIT:-1.0}
+    mem_limit: '512m'
+    cpus: 1.0
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-booker}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
       RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
-      - '127.0.0.1:5672:5672'
-      - '127.0.0.1:15672:15672'
+      - target: 5672
+        published: '5672'
+        host_ip: 127.0.0.1
+      - target: 15672
+        published: '15672'
+        host_ip: 127.0.0.1
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     healthcheck:
       test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
       interval: 10s
@@ -78,6 +87,7 @@ services:
       PASSWORD_RESET_TOKEN_PAGE_URL: ${PASSWORD_RESET_TOKEN_PAGE_URL:-}
       PASSWORD_RESET_TIME_ZONE: ${PASSWORD_RESET_TIME_ZONE:-Asia/Dhaka}
       PASSWORD_RESET_TTL: ${PASSWORD_RESET_TTL:-PT30M}
+      PASSWORD_RESET_MONTHLY_LIMIT: ${PASSWORD_RESET_MONTHLY_LIMIT:-3}
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-PT15M}
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-P7D}
       GOOGLE_DRIVE_ENABLED: ${GOOGLE_DRIVE_ENABLED:-false}

@@ -73,6 +73,12 @@ Test concurrent 401s, refresh failure, logout failure/local clearing, no bearer 
 
 Read API.md sections 6.5–6.7. Implement authenticated change-password, public forgot-password and emailed-link reset-password pages using exact documented request fields and constraints. Show the generic forgot-password response without exposing account existence. Handle 204 without JSON parsing and expired/used tokens safely.
 
+Handle reset 429 for the per-account successful-reset limit (default three per UTC
+calendar month, configured by the backend). Show the backend message and exposed
+Retry-After seconds; do not automatically retry. Request a fresh email after renewal
+if needed. Forgot-password still returns generic 202 and sends no mail at exhaustion;
+do not infer allowance/delivery from it. Authenticated password changes do not count.
+
 Support pasting the emailed token when PASSWORD_RESET_URL is blank. If link delivery is configured, read the token from the agreed link query parameter and document that PASSWORD_RESET_URL must target this screen. Do not add a token lookup API. After a successful password change/reset invalidate local session state and require login. Avoid token leakage to logs, analytics and referrers; remove the reset token from browser history after capturing it for the form.
 
 Test validation, incorrect current password, reset success/error, generic email confirmation and session cleanup. Run relevant checks.
@@ -109,7 +115,7 @@ Provide loading, empty, failure and retry states with responsive cards/table and
 
 Read API.md sections 13.1–13.8 and 14.1–14.2. Implement authenticated public catalogue/detail and exact title/author filters. Owners can retrieve public reading summaries in batches <=100 and see clearly labeled workspace-shared progress. Super Admin can browse metadata/PDFs but must not fetch workspace progress.
 
-Implement workspace request creation with {title, authorName}, not author, and workspace request history including PENDING/ACCEPTED/REJECTED states. Workspace history has no status-filter parameter; any local filter is client-side. Handle duplicate requests/existing public books and link accepted bookId to public detail. No cancellation or request-edit endpoint exists. The backend queues Super Admin notification email through a PostgreSQL outbox and RabbitMQ on submission; success does not confirm delivery. Do not send client-side email or accept administrator recipients from the user.
+Implement workspace request creation with {title, authorName}, not author, and workspace request history including PENDING/ACCEPTED/REJECTED states. Workspace history has no status-filter parameter; any local filter is client-side. Handle duplicate requests/existing public books and link accepted bookId to public detail. Handle 429 for the shared ten-request UTC monthly workspace quota, using the exposed Retry-After response header to explain the reset delay. Do not automatically retry blocked submissions or treat reviewed requests as restored slots; backend enforcement is authoritative. No cancellation or request-edit endpoint exists. The backend queues Super Admin notification email through a PostgreSQL outbox and RabbitMQ on submission; success does not confirm delivery. Do not send client-side email or accept administrator recipients from the user.
 
 Test authenticated access, shared progress labeling, request validation/body/history, null accepted IDs while pending, 409 behavior and admin avoidance of workspace APIs.
 

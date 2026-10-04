@@ -1,6 +1,6 @@
 # Password change and recovery
 
-The backend supports workspace owners and Super Admin accounts using the existing PBKDF2 encoder. `PasswordService` manages the token lifecycle through the `PasswordResetDelivery` interface; `SmtpPasswordResetDelivery` handles SMTP and message formatting. Flyway V11 adds an account `credential_version` and one reset-token row per email. V1–V10 are unchanged.
+The backend supports workspace owners and Super Admin accounts using the existing PBKDF2 encoder. `PasswordService` manages the token lifecycle and monthly reset allowance through the `PasswordResetDelivery` interface; `SmtpPasswordResetDelivery` handles SMTP and message formatting. Flyway V11 adds an account `credential_version` and one reset-token row per email. V15 adds successful recovery history; earlier migrations are unchanged.
 
 ## APIs
 
@@ -14,15 +14,49 @@ All requests use JSON and all successful responses use `Cache-Control: no-store`
 
 New passwords must contain 12–64 characters and cannot be blank. Current password is required, at most 64 characters. Emails are normalized to lowercase and limited to 254 characters. Tokens are 43 URL-safe characters. Do not send an email, user ID, role or workspace ID to select the account for change/reset.
 
-Errors use the existing ApiError schema: 400 invalid input, incorrect current password, or invalid/expired/used reset token; 401 unauthenticated/revoked credentials for password change; 503 reset email not configured. SMTP delivery failures return the same 202 as unknown accounts and invalidate the newly issued token; server logs only a generic delivery warning. Unknown accounts and requests within the cooldown also return 202 without sending email. This avoids account disclosure through response bodies/statuses; synchronous SMTP can still cause timing differences.
+Errors use the existing ApiError schema: 400 invalid input, incorrect current password, or invalid/expired/used reset token; 401 unauthenticated/revoked credentials for password change; 429 valid reset token but monthly allowance exhausted, with `Retry-After` seconds until the next UTC month; 503 reset email not configured. SMTP delivery failures return the same 202 as unknown accounts and invalidate the newly issued token; server logs only a generic delivery warning. Unknown accounts, requests within the cooldown and accounts at the monthly limit also return 202 without sending email. This avoids account disclosure through response bodies/statuses; synchronous SMTP can still cause timing differences.
 
 ## Reset flow
 
 1. Submit the email to forgot-password.
 2. With `PASSWORD_RESET_URL` blank, the email contains a 43-character token to copy into Swagger or an Android reset form. No web app is required. With an HTTPS reset URL configured, the email contains a link with a `token` query parameter instead. The client collects a new password and POSTs token/newPassword to reset-password. This backend does not provide a reset screen.
 3. Token has 256 random bits; only its SHA-256 digest is stored. Default expiry is 30 minutes. A new email after the 60-second per-account cooldown replaces the earlier token.
-4. Reset consumes the token once, changes the PBKDF2 hash, increments credential version, and removes every refresh/reset token for that account in one transaction. Change-password does the same after checking the current password. Login/refresh and password changes lock the same account row to prevent concurrent issuance with stale credentials.
+4. Reset validates and consumes the token, checks the monthly allowance, changes the PBKDF2 hash, increments credential version, removes every refresh/reset token and inserts successful recovery history in one transaction. A quota rejection rolls everything back. Change-password revokes sessions after checking the current password but does not consume recovery allowance. Login/refresh and password changes lock the same account row to prevent concurrent issuance with stale credentials.
 5. All prior access JWTs fail immediately on subsequent authentication; older JWTs with no version claim are treated as version zero until the first password change. Log in again with the new password. Normal logout behavior remains unchanged.
+
+## Monthly successful-reset allowance
+
+Set `PASSWORD_RESET_MONTHLY_LIMIT=3` in the backend `.env` or deployment environment.
+The default is three completed resets per account per UTC calendar month, including
+Super Admin; only positive integers are accepted and invalid values fail startup.
+The allowance is per registered account, not shared by the workspace. Increasing
+or lowering the setting uses the same persisted history; restart all backend replicas
+with the same value. Java/Maven does not load `.env` automatically: export it through
+the existing startup script or IDE environment; Compose passes this setting through.
+
+Only committed successful `POST /api/auth/reset-password` operations count. Email
+requests, resends, SMTP failures, invalid/expired/replaced/replayed tokens, validation
+errors, rolled-back transactions and authenticated `change-password` do not count.
+After the last allowed reset, forgot-password still returns generic 202 but sends no
+email. If a previously issued valid token reaches reset-password while the allowance
+is exhausted (for example after lowering the setting), it returns 429 `ApiError` with
+`Retry-After`; password, sessions and the token remain unchanged. Invalid or expired
+tokens still return 400 even at the limit. Never automatically retry a blocked reset.
+After the next month begins, request a fresh token if the old one has expired.
+
+PostgreSQL history in `password_reset_history` remains authoritative across restarts
+and replicas. The existing account row lock and READ COMMITTED reads serialize
+issuance/reset checks. Database time is read after acquiring the lock, determines
+the UTC month and token-expiry check, and is stored as the successful reset's
+`reset_at`. A waiter crossing a month boundary uses the new month. There is no
+scheduled counter reset: the query naturally excludes earlier months. Email and
+browser timezone settings affect deadline display only, not the quota boundary.
+
+V15 preserves existing accounts, credentials, refresh sessions and pending reset
+tokens. Existing accounts start with zero recorded resets at upgrade; older completion
+counts cannot be reconstructed from the one-row token table. Do not delete current
+month history to restore allowance. There is no undo migration; recover through a
+forward fix or a coordinated database restore as described in the operations guide.
 
 ## Swagger and Android without a web app
 
@@ -42,6 +76,9 @@ Leave `PASSWORD_RESET_URL=` blank in `.env`, configure SMTP and
    new-password inputs. Trim pasted token whitespace before submitting; preserve
    the password as entered. Do not persist or log the token. Handle 400 for expired,
    invalid or used tokens, and allow a new email request after the 60-second cooldown.
+   On reset 429, show the backend quota message and `Retry-After` wait; disable
+   automatic retries and explain that a fresh email may be needed next month.
+   A generic forgot-password 202 does not confirm remaining allowance or delivery.
 
 The existing 256-bit token, 30-minute default expiry, single-use checks and session
 revocation apply in both delivery modes. This is a long copyable token, not a
@@ -66,6 +103,8 @@ Configure these backend environment variables (also available in compose and `.e
   `Asia/Dhaka`. Invalid identifiers fail startup. Email cannot automatically detect
   each recipient’s device timezone. The browser copy helper uses the device timezone.
 - `PASSWORD_RESET_TTL`: ISO-8601 duration, default PT30M, positive and at most 24 hours.
+- `PASSWORD_RESET_MONTHLY_LIMIT`: positive integer, default 3 successful resets per
+  account per UTC calendar month. Authenticated password changes are excluded.
 
 SMTP connections/read/write have five-second timeouts. Secrets stay on the backend. Password reset is unavailable until SMTP and sender are configured; signup/login/change-password continue to work. Real email delivery needs provider configuration and has not been verified with a live provider.
 
@@ -112,7 +151,10 @@ continues to use its existing query-token contract.
 
 `PasswordManagementTest` covers revocation, owner/admin password changes, incorrect
 passwords, reset hashing/expiry/replay/replacement, concurrent consumption, cooldown,
-generic unknown-account responses, SMTP failure and missing configuration.
+generic unknown-account/quota responses, SMTP failure, missing configuration,
+monthly exhaustion, account isolation, rollback and configurable limits.
+`PasswordResetQuotaTest` covers startup validation, post-lock year rollover and
+fractional `Retry-After` rounding; migration tests preserve populated V14 data.
 `SmtpPasswordResetDeliveryTest` covers token-only and link email formatting and URL/configuration rules. Integration tests exercise token-only email, reset, expiry, replay, cooldown and session revocation with no reset URL.
 Run the suite using [the disposable database setup](operations.md#testing).
 Live SMTP delivery and client reset screens require separate verification.

@@ -72,7 +72,7 @@ public class SecurityConfig {
         corsConfiguration.setAllowedOrigins(java.util.Arrays.stream(origins.split(",")).map(String::strip).toList());
         corsConfiguration.setAllowedMethods(List.of("GET", "HEAD", "POST", "PUT", "DELETE"));
         corsConfiguration.setAllowedHeaders(List.of("Authorization", "Cache-Control", "Content-Type", "Last-Event-ID", "Range", "If-Range", "Idempotency-Key"));
-        corsConfiguration.setExposedHeaders(List.of("Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition", "ETag"));
+        corsConfiguration.setExposedHeaders(List.of("Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition", "ETag", "Retry-After"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", corsConfiguration);

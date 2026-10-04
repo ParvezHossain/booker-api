@@ -84,6 +84,32 @@ class BookReadingMigrationTest {
         });
     }
 
+    @Test void passwordResetQuotaUpgradePreservesAccountsSessionsAndPendingTokens() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "14");
+            var jdbc = schema.jdbc();
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,role) VALUES ('reset-upgrade@example.com','test-only','SUPER_ADMIN')");
+            jdbc.update("INSERT INTO password_reset_tokens(email,token_hash,expires_at) VALUES ('reset-upgrade@example.com',?,now()+interval '30 minutes')", "a".repeat(64));
+            jdbc.update("INSERT INTO refresh_tokens(token_hash,email,expires_at) VALUES (?,'reset-upgrade@example.com',now()+interval '1 day')", "b".repeat(64));
+            var users = jdbc.queryForList("SELECT * FROM workspace_users ORDER BY email");
+            var tokens = jdbc.queryForList("SELECT * FROM password_reset_tokens");
+            var sessions = jdbc.queryForList("SELECT * FROM refresh_tokens");
+            migrate(schema.name(), null);
+            assertEquals(users, jdbc.queryForList("SELECT * FROM workspace_users ORDER BY email"));
+            assertEquals(tokens, jdbc.queryForList("SELECT * FROM password_reset_tokens"));
+            assertEquals(sessions, jdbc.queryForList("SELECT * FROM refresh_tokens"));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_reset_history", Integer.class));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update(
+                    "INSERT INTO password_reset_history(email,reset_at) VALUES ('missing@example.com',now())"));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update(
+                    "INSERT INTO password_reset_history(email,reset_at) VALUES ('reset-upgrade@example.com',NULL)"));
+            jdbc.update("INSERT INTO password_reset_history(email,reset_at) VALUES ('reset-upgrade@example.com',clock_timestamp())");
+            assertTrue(jdbc.queryForList("SELECT indexname FROM pg_indexes WHERE schemaname=?", String.class, schema.name())
+                    .contains("password_reset_history_account_month"));
+            assertEquals(0, flyway(schema.name(), null).migrate().migrationsExecuted);
+        });
+    }
+
     @Test void requestEmailUpgradePreservesQueuedDecisionsAndAllowsIndependentAdminReceipts() throws Exception {
         inSchema(schema -> {
             migrate(schema.name(), "12");

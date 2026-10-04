@@ -36,7 +36,38 @@ Malformed JSON, JSON null, missing publication date and oversized metadata field
 
 Title and author are taken from the original request; administrators provide the existing model's remaining metadata. Publication date is required, at most 20 characters. Description is at most 5000 characters. Request title/author are required, at most 255 characters, and stripped of surrounding whitespace.
 
-Errors: 400 invalid UUID, fields or multipart; 401 missing/invalid authentication; 403 missing workspace or Super Admin privilege; 404 missing request; 409 duplicate pending request, existing public book or already reviewed request; 413 configured multipart limit; 415 invalid PDF/type/extension; 503 storage unavailable. Rejection of a missing request returns 404. Invalid admin status filters return 400.
+Errors: 400 invalid UUID, fields or multipart; 401 missing/invalid authentication; 403 missing workspace or Super Admin privilege; 404 missing request; 409 duplicate pending request, existing public book or already reviewed request; 429 workspace monthly submission quota exhausted (Retry-After header); 413 configured multipart limit; 415 invalid PDF/type/extension; 503 storage unavailable. Rejection of a missing request returns 404. Invalid admin status filters return 400.
+
+## Monthly workspace request limit
+
+Each registered workspace may create **10 requests per UTC calendar month**, shared
+by all its accounts and applying equally to FREE and PRO. The window starts at
+00:00 UTC on the first day of the month and resets at 00:00 UTC on the first day
+of the next month; this is not a rolling 30-day window.
+
+All successfully persisted requests count, including PENDING, ACCEPTED and REJECTED.
+Reviewing a request does not restore allowance. Invalid/unauthenticated submissions,
+existing-public-book conflicts, duplicate pending requests and rolled-back transactions
+do not consume a slot. Existing requests in the current month count immediately
+when this policy is deployed; workspaces already at or above 10 must wait for reset.
+
+`POST /api/public-book-requests` returns 429 with the standard `ApiError` and a
+`Retry-After` integer in seconds until the next UTC month. No request or email receipt
+is created for a blocked submission. CORS exposes the header so Angular can read it.
+There is no quota-usage endpoint, plan override, configuration switch or Super Admin
+bypass for workspace submissions. Request history/review and email retries remain
+available; RabbitMQ redelivery does not create another request or consume allowance.
+
+`BookRequestRateLimiter` uses the existing `(workspace_id, created_at)` index and
+locks the authenticated workspace row inside the submission's READ COMMITTED
+transaction. It counts history after acquiring the lock; the indexed quota query
+reads at most ten matching rows even for an existing workspace with a larger
+historical backlog. The lock lasts until request/email commit or rollback.
+This serializes concurrent submissions across
+backend replicas without in-memory counters or a new database table. Database time
+is read after locking and used for both the UTC window and the new `created_at`,
+so a transaction waiting across midnight cannot count in one month and persist in
+another. No Flyway migration or new environment variable is needed.
 
 ## Persistence and transactions
 
@@ -97,4 +128,4 @@ feature pause, deployment and operator recovery. Password-reset mail remains sep
 
 ## Verification
 
-PublicLibraryRequestIntegrationTest covers authenticated submission, validation, identity derivation, workspace history isolation, admin authorization, rejection, acceptance, PDF rollback (including outer transaction file cleanup), concurrent reviews, duplicate submissions, transactional administrator notifications, submission rollback and invalid review transitions. PublicRequestEmailDeliveryTest covers decision and administrator SMTP delivery, UTF-8 HTML/plain-text alternatives, precise receipt deletion, missing configuration and retention on failure. PublicRequestEmailTemplateTest verifies escaping and request details; BookReadingMigrationTest verifies preservation of queued emails during V13/V14 upgrades. RequestEmailPublisherTest verifies bounded batches and broker failures; RequestEmailRabbitIntegrationTest exercises real RabbitMQ backpressure, sequential delivery across two consumers, delayed retries, parked failures, duplicate tokens and quarantine. OpenApiCoverageTest verifies all 43 business operations and the Markdown route inventory. Existing public library tests continue to verify upload, reading, authorization and deletion.
+PublicLibraryRequestIntegrationTest covers authenticated submission, validation, identity derivation, workspace history isolation, admin authorization, rejection, acceptance, PDF rollback (including outer transaction file cleanup), concurrent reviews, duplicate submissions, transactional administrator notifications, submission rollback, ten-request boundary, monthly reset, workspace/account/plan sharing, parallel submission enforcement and invalid review transitions. PublicRequestEmailDeliveryTest covers decision and administrator SMTP delivery, UTF-8 HTML/plain-text alternatives, precise receipt deletion, missing configuration and retention on failure. PublicRequestEmailTemplateTest verifies escaping and request details; BookReadingMigrationTest verifies preservation of queued emails during V13/V14 upgrades. RequestEmailPublisherTest verifies bounded batches and broker failures; RequestEmailRabbitIntegrationTest exercises real RabbitMQ backpressure, sequential delivery across two consumers, delayed retries, parked failures, duplicate tokens and quarantine. BookRequestRateLimiterTest covers post-lock time and leap-month/year boundaries. OpenApiCoverageTest verifies the submission 429/Retry-After schema, all 43 business operations and the Markdown route inventory. Existing public library tests continue to verify upload, reading, authorization and deletion.

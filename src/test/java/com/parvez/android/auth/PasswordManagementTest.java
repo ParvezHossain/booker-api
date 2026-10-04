@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest(properties={"management.health.mail.enabled=false","app.password-reset.from=books@example.com", "app.password-reset.url=",
-        "app.password-reset.token-page-url=https://api.example.com/password-reset-token"})
+        "app.password-reset.token-page-url=https://api.example.com/password-reset-token", "app.password-reset.monthly-limit=3"})
 class PasswordManagementTest {
     @Autowired WorkspaceAccounts accounts;
     @Autowired TokenService tokens;
@@ -74,6 +74,7 @@ class PasswordManagementTest {
                 .content(resetBody(token, fresh))).andExpect(status().isNoContent());
         mvc.perform(post("/api/auth/reset-password").contentType("application/json")
                 .content(resetBody(token, fresh))).andExpect(status().isBadRequest());
+        assertEquals(1, resetCount(email));
         mvc.perform(get("/api/workspace").header("Authorization", "Bearer "+pair.accessToken())).andExpect(status().isUnauthorized());
         assertThrows(Exception.class, () -> tokens.refresh(pair.refreshToken()));
         assertNotNull(tokens.login(email, fresh));
@@ -91,6 +92,7 @@ class PasswordManagementTest {
         mvc.perform(post("/api/auth/reset-password").contentType("application/json").content(resetBody(token,fresh)))
                 .andExpect(status().isBadRequest());
         assertNotNull(tokens.login(email,old));
+        assertEquals(0, resetCount(email));
     }
     @Test void replacementAndConcurrentConsumption() throws Exception {
         String first = requestToken();
@@ -108,6 +110,7 @@ class PasswordManagementTest {
         mvc.perform(post("/api/auth/forgot-password").contentType("application/json").content("{\"email\":\""+email+"\"}"))
                 .andExpect(status().isAccepted());
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM password_reset_tokens WHERE email=? AND expires_at > now()",Integer.class,email));
+        assertEquals(0, resetCount(email));
     }
     @Test void superAdminCanChangePasswordWithBasicAuthentication() throws Exception {
         String admin = "admin-password-"+UUID.randomUUID()+"@example.com";
@@ -123,7 +126,7 @@ class PasswordManagementTest {
         var factory = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
         var service = new PasswordService(jdbc, context.getBean(org.springframework.security.crypto.password.PasswordEncoder.class),
                 new SmtpPasswordResetDelivery(factory.getBeanProvider(JavaMailSender.class), "", "", "",
-                        context.getBean(PasswordResetEmailTemplate.class)), java.time.Duration.ofMinutes(30));
+                        context.getBean(PasswordResetEmailTemplate.class)), java.time.Duration.ofMinutes(30), 3);
         for (String account : List.of(email,"absent@example.com")) {
             var failure = assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> service.forgot(account));
             assertEquals(503,failure.getStatusCode().value());
@@ -151,8 +154,148 @@ class PasswordManagementTest {
                 .getHeader("Content-Security-Policy");
         assertNotEquals(policy, secondPolicy);
     }
+
+    @Test void threeSuccessfulResetsExhaustAllowanceWithoutSendingMoreEmails() throws Exception {
+        for (int i = 1; i <= 3; i++) {
+            String token = requestToken();
+            assertEquals(i - 1, resetCount(email), "Email issuance must not count");
+            mvc.perform(post("/api/auth/reset-password").contentType("application/json").content(resetBody(token, fresh)))
+                    .andExpect(status().isNoContent());
+            assertEquals(i, resetCount(email));
+        }
+        mvc.perform(post("/api/auth/forgot-password").contentType("application/json").content("{\"email\":\"" + email + "\"}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.message").value("If the account exists, a password reset email will be sent."));
+        verify(mail, times(3)).send(any(MimeMessage.class));
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_reset_tokens WHERE email=?", Integer.class, email));
+        assertNotNull(tokens.login(email, fresh));
+    }
+
+    @Test void exhaustedQuotaRejectsValidTokenButPreservesPasswordSessionsAndToken() throws Exception {
+        var session = tokens.login(email, old);
+        String token = requestToken();
+        seedCurrentResets(email, 3);
+        var response = mvc.perform(post("/api/auth/reset-password").contentType("application/json").content(resetBody(token, fresh)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.path").value("/api/auth/reset-password"))
+                .andExpect(jsonPath("$.message").value("You can reset your password at most 3 times per UTC calendar month"))
+                .andReturn().getResponse();
+        long retry = Long.parseLong(response.getHeader("Retry-After"));
+        var now = jdbc.queryForObject("SELECT clock_timestamp()", java.sql.Timestamp.class).toInstant();
+        var next = now.atZone(java.time.ZoneOffset.UTC).toLocalDate().withDayOfMonth(1)
+                .atStartOfDay(java.time.ZoneOffset.UTC).plusMonths(1).toInstant();
+        assertTrue(Math.abs(retry - java.time.Duration.between(now, next).toSeconds()) <= 2);
+        assertEquals(com.parvez.android.security.OpaqueTokens.sha256Hex(token),
+                jdbc.queryForObject("SELECT token_hash FROM password_reset_tokens WHERE email=?", String.class, email));
+        assertEquals(3, resetCount(email));
+        assertNotNull(tokens.decodeAccess(session.accessToken()));
+        assertNotNull(tokens.refresh(session.refreshToken()));
+        assertNotNull(tokens.login(email, old));
+        mvc.perform(post("/api/auth/reset-password").contentType("application/json").content(resetBody("B".repeat(43), fresh)))
+                .andExpect(status().isBadRequest()).andExpect(header().doesNotExist("Retry-After"));
+        jdbc.update("UPDATE password_reset_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE email=?", email);
+        mvc.perform(post("/api/auth/reset-password").contentType("application/json").content(resetBody(token, fresh)))
+                .andExpect(status().isBadRequest()).andExpect(header().doesNotExist("Retry-After"));
+        mvc.perform(post("/api/auth/forgot-password").contentType("application/json").content("{\"email\":\"" + email + "\"}"))
+                .andExpect(status().isAccepted());
+        verify(mail, times(1)).send(any(MimeMessage.class));
+    }
+
+    @Test void priorAndFollowingMonthsDoNotUseCurrentAllowance() throws Exception {
+        jdbc.update("""
+                INSERT INTO password_reset_history(email, reset_at)
+                SELECT ?, (date_trunc('month', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') + elapsed
+                FROM (VALUES (interval '-1 microsecond'), (interval '1 month'), (interval '1 month 1 second')) dates(elapsed)
+                """, email);
+        String token = requestToken();
+        passwords.reset(token, fresh);
+        assertEquals(4, resetCount(email));
+        assertNotNull(tokens.login(email, fresh));
+    }
+
+    @Test void accountAllowanceIsIndependentAndAuthenticatedChangeDoesNotConsumeIt() throws Exception {
+        seedCurrentResets(email, 3);
+        String admin = "reset-admin-" + UUID.randomUUID() + "@example.com";
+        accounts.provisionSuperAdmin(admin, old);
+        String token = requestToken(admin);
+        passwords.reset(token, fresh);
+        assertEquals(1, resetCount(admin));
+        assertEquals(3, resetCount(email));
+        mvc.perform(post("/api/auth/change-password")
+                .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic(email, old))
+                .contentType("application/json").content("{\"currentPassword\":\"" + old + "\",\"newPassword\":\"" + fresh + "\"}"))
+                .andExpect(status().isNoContent());
+        assertEquals(3, resetCount(email));
+        assertNotNull(tokens.login(email, fresh));
+    }
+
+    @Test void concurrentConsumptionCannotOverrunLastMonthlySlot() throws Exception {
+        seedCurrentResets(email, 2);
+        String token = requestToken();
+        Callable<Integer> consume = () -> mvc.perform(post("/api/auth/reset-password").contentType("application/json")
+                .content(resetBody(token, fresh))).andReturn().getResponse().getStatus();
+        try (var pool = Executors.newFixedThreadPool(4)) {
+            var results = pool.invokeAll(List.of(consume, consume, consume, consume));
+            var statuses = results.stream().map(result -> {
+                try { return result.get(); } catch (Exception ex) { throw new RuntimeException(ex); }
+            }).toList();
+            assertEquals(1, statuses.stream().filter(status -> status == 204).count());
+            assertEquals(3, statuses.stream().filter(status -> status == 400).count());
+        }
+        assertEquals(3, resetCount(email));
+    }
+
+    @Test void rollbackRestoresQuotaPasswordTokenAndSessions() throws Exception {
+        String token = requestToken();
+        var session = tokens.login(email, old);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(
+                context.getBean(org.springframework.transaction.PlatformTransactionManager.class));
+        assertThrows(IllegalStateException.class, () -> transaction.executeWithoutResult(status -> {
+            passwords.reset(token, fresh);
+            throw new IllegalStateException("Test-only rollback");
+        }));
+        assertEquals(0, resetCount(email));
+        assertNotNull(tokens.decodeAccess(session.accessToken()));
+        assertNotNull(tokens.refresh(session.refreshToken()));
+        assertNotNull(tokens.login(email, old));
+        passwords.reset(token, fresh);
+        assertEquals(1, resetCount(email));
+        assertNotNull(tokens.login(email, fresh));
+    }
+
+    @Test void configuredHigherAndLowerLimitsUseExistingCommittedHistory() throws Exception {
+        String token = requestToken();
+        seedCurrentResets(email, 3);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(
+                context.getBean(org.springframework.transaction.PlatformTransactionManager.class));
+        var encoder = context.getBean(org.springframework.security.crypto.password.PasswordEncoder.class);
+        var delivery = context.getBean(PasswordResetDelivery.class);
+        var lower = new PasswordService(jdbc, encoder, delivery, java.time.Duration.ofMinutes(30), 1);
+        var rejected = assertThrows(PasswordResetLimitExceededException.class,
+                () -> transaction.executeWithoutResult(status -> lower.reset(token, fresh)));
+        assertEquals(429, rejected.getStatusCode().value());
+        assertTrue(rejected.getReason().contains("at most 1 times"));
+        assertEquals(3, resetCount(email));
+        var higher = new PasswordService(jdbc, encoder, delivery, java.time.Duration.ofMinutes(30), 5);
+        transaction.executeWithoutResult(status -> higher.reset(token, fresh));
+        assertEquals(4, resetCount(email));
+        assertNotNull(tokens.login(email, fresh));
+    }
+
+    private int resetCount(String account) {
+        return jdbc.queryForObject("SELECT count(*) FROM password_reset_history WHERE email=?", Integer.class, account);
+    }
+
+    private void seedCurrentResets(String account, int count) {
+        jdbc.update("INSERT INTO password_reset_history(email, reset_at) SELECT ?, clock_timestamp() FROM generate_series(1, ?)", account, count);
+    }
+
     private String requestToken() throws Exception {
-        mvc.perform(post("/api/auth/forgot-password").contentType("application/json").content("{\"email\":\""+email.toUpperCase()+"\"}"))
+        return requestToken(email);
+    }
+    private String requestToken(String recipient) throws Exception {
+        mvc.perform(post("/api/auth/forgot-password").contentType("application/json").content("{\"email\":\""+recipient.toUpperCase()+"\"}"))
                 .andExpect(status().isAccepted()).andExpect(header().string("Cache-Control","no-store"))
                 .andExpect(jsonPath("$.message").value("If the account exists, a password reset email will be sent."))
                 .andExpect(jsonPath("$.token").doesNotExist());
@@ -162,7 +305,7 @@ class PasswordManagementTest {
         String text = alternatives.getBodyPart(0).getContent().toString();
         String token = text.split("Reset token:\n")[1].split("\n")[0];
         var expiresAt = jdbc.queryForObject("SELECT expires_at FROM password_reset_tokens WHERE email=?",
-                java.sql.Timestamp.class, email).toInstant();
+                java.sql.Timestamp.class, recipient).toInstant();
         assertTrue(text.contains("#token=" + token + "&expiresAt=" + expiresAt.toEpochMilli()));
         assertTrue(token.matches("[A-Za-z0-9_-]{43}"));
         return token;

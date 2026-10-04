@@ -39,7 +39,8 @@ emailed token when resetting. No workspace/user/role selector is needed.
    Email must be nonblank, valid email syntax and at most 254 characters.
    The backend normalizes it to lowercase. Invalid input returns 400;
    unconfigured SMTP/sender returns 503. Unknown accounts, requests within the
-   cooldown and SMTP failures all receive the same generic 202 response.
+   cooldown, exhausted monthly reset allowance and SMTP failures all receive the
+   same generic 202 response. No email is issued at monthly exhaustion.
    A 202 response neither proves account existence nor guarantees email delivery.
 
 2. With backend `PASSWORD_RESET_URL` blank, email contains `Reset token:` followed
@@ -67,6 +68,12 @@ emailed token when resetting. No workspace/user/role selector is needed.
    New password must be nonblank and 12–64 characters. Invalid input or an invalid,
    expired or already-used token returns 400. Success consumes the token once and
    invalidates the account's previous access/refresh/reset tokens. Login is required.
+   Successful resets are capped per account per UTC calendar month, default 3,
+   configured by backend `PASSWORD_RESET_MONTHLY_LIMIT`. A valid token submitted at
+   the limit returns 429 `ApiError` plus integer `Retry-After` seconds until the next
+   UTC month. It leaves password, sessions and token unchanged. Invalid/expired
+   tokens remain 400. Only completed resets count; requesting mail, failed attempts
+   and authenticated change-password do not. The allowance is not shared by a workspace.
 
 Errors use `ApiError` fields `dateTime`, `status`, `error`, `message`, `path`.
 Use existing safe error handling with a fallback for empty/non-JSON network or
@@ -102,6 +109,10 @@ proxy responses. Preserve the API paths and JSON names exactly. Avoid duplicatin
   cancel pending refresh work so it cannot restore stale credentials, clear sensitive
   form state and remove recovery screens from the back stack. Show a success message
   on login and require login with the new password. Do not auto-login or reuse old tokens.
+- On reset 429, display the safe backend message and Retry-After delay, keep existing
+  sessions intact, and prevent automatic reset retries. Explain that a fresh email
+  may be needed after allowance renewal because tokens expire independently. Do not
+  hardcode three as client enforcement or infer allowance from generic email 202.
 - Keep token/password values in memory only. Do not put them in SavedStateHandle,
   persistent saveable state, preferences, databases, navigation arguments, logs,
   HTTP body logging, crash reports or analytics. Clear them on completion or exit.
@@ -125,7 +136,8 @@ that unimplemented app-link or web features exist.
 
 Use the project's existing test tools. Cover public request paths and JSON fields,
 generic 202 behavior, token validation, password preservation/matching, empty 204,
-400/503 and network errors, resend cooldown, duplicate submissions, sensitive-state
+400/429/503 and network errors, Retry-After handling, generic monthly-exhausted 202,
+resend cooldown, duplicate submissions, sensitive-state
 cleanup, session invalidation and navigation back-stack behavior. Verify that public
 recovery errors do not trigger authenticated refresh loops. Run the applicable
 Gradle tests, lint and debug build; report actual commands and any unavailable checks.

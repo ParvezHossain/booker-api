@@ -41,13 +41,14 @@ job dashboards or production alerting. The LGTM Compose service is local tooling
 | --- | --- |
 | Signup/workspace | `WorkspaceController` is the HTTP adapter; `WorkspaceAccounts` provisions/loads principals |
 | Sessions | `TokenService` issues/rotates tokens and checks database credential versions |
-| Passwords | `PasswordService` manages tokens/revocation; `PasswordResetDelivery` separates mail transport |
+| Passwords | `PasswordService` manages tokens/revocation and configurable monthly successful-reset allowance; `PasswordResetDelivery` separates mail transport |
 | Books | Private `BookService` and public `PublicBookService` share metadata mapping but retain distinct permissions/quotas |
 | Documents | `BookDocumentService` authorizes, validates and activates immutable document metadata |
 | Byte storage | `FileStorageService` streams bytes through opaque provider-generated keys |
 | Reading | `ReadingProgressService` shares rules through a closed account/workspace scope enum |
 | Drive | Connection/cipher/gateway/import services separate state, encryption, HTTP transport and queued work |
 | Email queue | Bounded confirmed publisher, single active RabbitMQ consumer, database retry/failed receipts |
+| Request quota | BookRequestRateLimiter uses workspace locking and indexed request history for 10 submissions per UTC month |
 | Requests | `PublicLibraryRequestService` reviews requests and commits notification/mail receipts atomically |
 | Notifications | Event store plus bounded virtual-thread SSE workers deliver workspace-scoped replay |
 | Errors | `GlobalExceptionHandler` maps application/framework request errors to safe status-aware responses |
@@ -66,6 +67,7 @@ bearer secrets and digests; passwords use salted PBKDF2 instead of SHA-256.
 | `reading_progress`, operations | Account/book primary key; account/operation retry identity; document/book foreign keys |
 | `public_reading_progress`, operations | Workspace/book primary key and workspace/operation retry identity |
 | `refresh_tokens`, `password_reset_tokens` | Hashed secrets with expiry; reset row unique per account; account credential version invalidates JWTs |
+| `password_reset_history` | Successful recovery audit keyed by identity; indexed account/time query enforces the UTC monthly allowance across replicas |
 | `google_drive_*` | Encrypted account connections, expiring hashed browser states and durable import jobs |
 | `book_events`, cursor | Workspace events allocated by a commit-ordered transactional counter |
 | `public_library_book_requests`, `public_request_emails` | Workspace request audit and committed typed administrator/requester email receipts with UUID publication/retry/failed state |
@@ -79,12 +81,22 @@ files exist; coordinated backup restoration or a forward fix is required.
 
 - Login/refresh/password mutations lock the same account row. Password replacement
   increments credential version and removes reset/refresh sessions transactionally.
+- Recovery reads post-lock database time and READ COMMITTED history, enforcing the
+  positive PASSWORD_RESET_MONTHLY_LIMIT (default three per account per UTC month).
+  Successful history and password/session updates commit together. Email issuance,
+  failed/rolled-back attempts and authenticated changes do not consume allowance.
+  Exhausted forgot-password stays generic 202 without mail; valid reset tokens
+  receive 429/Retry-After, while invalid or expired tokens remain 400.
 - Private creation locks its workspace for quota and uniqueness checks. The insert
   trigger writes an event before commit; rollback exposes neither book nor event.
 - Document replacement/progress writes lock the authorized book. Metadata activation
   deactivates the old version and creates a new version within one transaction.
 - Private uploads additionally lock workspace storage accounting; all retained versions
   count. Bytes are staged/validated before normal upload activation.
+- Request submission locks its workspace, counts current UTC-month history under
+  READ COMMITTED, and enforces a shared ten-request cap. Post-lock database time
+  determines both the quota window and persisted creation timestamp. Failed/rolled-back
+  submissions consume no allowance; reviews do not release it.
 - Request submission snapshots every persisted Super Admin recipient into the outbox
   in the request transaction. Escaped HTML and plain-text notification bodies are
   stored together; bootstrap email configuration is not the runtime recipient source.
@@ -126,7 +138,8 @@ server errors retain diagnostic context in access-controlled logs.
 
 Lists and request history are unpaginated. SSE polling scales per connection and
 existing streams are not continuously reauthenticated. There is no event/receipt/
-version retention policy, shared rate limiter or object-store provider. LOCAL
+version retention policy, general traffic rate limiter or object-store provider.
+Book-request submission has a PostgreSQL-backed shared monthly quota. LOCAL
 replicas need shared storage. Reset SMTP holds the account transaction; request/decision
 mail uses RabbitMQ with bounded retries, but SMTP still holds a receipt transaction.
 The publisher has a separate scheduler; remaining scheduled workers share the default
