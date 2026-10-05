@@ -1,7 +1,7 @@
 # Database tables and migration dependencies
 
-Booker uses one PostgreSQL database with 23 Flyway-created application tables.
-Each table is created once in V1–V19. Later versions alter existing tables,
+Booker uses one PostgreSQL database with 25 Flyway-created application tables.
+Each table is created once in V1–V20. Later versions alter existing tables,
 indexes or trigger functions to preserve records while introducing features.
 Repeated migrations against the same database do not create duplicate tables:
 Flyway records each applied version in `flyway_schema_history` and subsequent
@@ -11,14 +11,14 @@ This guide organizes the final schema by table. The executable migration files
 remain the chronological upgrade history in `src/main/resources/db/migration`.
 Hibernate validates the schema; JPA manages book queries and JDBC manages the
 remaining application state. Flyway's history and JobRunr-managed runtime tables
-are separate from the 23 application tables listed here.
+are separate from the 25 application tables listed here.
 
 ## Table inventory
 
 | Table | Created / later changes | Identity and responsibility |
 | --- | --- | --- |
 | `workspaces` | V4 | UUID primary key; name, FREE/PRO entitlement and private-book quota. Its row lock serializes private quota and monthly request checks. |
-| `workspace_users` | V4 / V10, V11 | Normalized email primary key; password hash, workspace, role and credential version. OWNER requires a workspace; SUPER_ADMIN requires null workspace. The account row lock serializes credentials and token issuance. |
+| `workspace_users` | V4 / V10, V11, V20 | Normalized email primary key; password hash, workspace, role and credential version. OWNER requires a workspace; SUPER_ADMIN requires null workspace. The account row lock serializes credentials, token issuance and email activation. V20 adds active status/time; new signup is pending, older accounts are grandfathered. |
 | `books` | V1 / V4, V9, V10; seeded by V2 | Shared BIGINT identity for PRIVATE and PUBLIC metadata; private rows require a workspace, public rows require null workspace. Exact author/title uniqueness applies within each private workspace and globally for public books. |
 | `book_event_cursor` | V3 | Singleton transactional counter; event IDs follow commit order across book and request events. |
 | `book_events` | V3 / V4, V9, V12 | BIGINT event primary key; workspace, event type and historical JSON payload. SSE replay reads this durable log. |
@@ -40,6 +40,8 @@ are separate from the 23 application tables listed here.
 | `password_change_history` | V17 / V18 indexes, V19 workspace snapshot | UUID primary key; committed CHANGE/RESET account, captured workspace UUID, time and IP/browser/device/User-Agent. Email completion retains this audit. |
 | `password_change_emails` | V17 | UUID primary/FK to password-change audit; independent confirmation publication, delayed retry and fenced lease state. |
 | `login_history` | V18 / V19 workspace snapshot | UUID primary key; successful credential login account, captured workspace UUID, time and IP/browser/device/User-Agent. It commits with token issuance. |
+| `email_activation_tokens` | V20 | One current digest per pending account, unique token hash, expiry and server resend cooldown. |
+| `email_activation_emails` | V20 | Separate encrypted short-lived activation outbox, opaque UUID publication, delayed retries and fenced delivery leases. |
 
 V19 removes workspace FKs from both activity histories to avoid acquiring a
 workspace lock after the account lock. Their captured workspace UUIDs remain
@@ -54,7 +56,7 @@ a retained audit UUID and null current name. See [security history](account-secu
 | Split `book_documents` by library type | Both book scopes use the same document lifecycle, storage abstraction, version/operation identity and composite document/book references. Authorization derives from the referenced book. Preserve this shared document table. |
 | Split submission/decision `public_request_emails` | Both email types use the same publisher, bounded queue, receipt UUID lookup, retry state and consumer. V13 makes type/recipient uniqueness explicit; V14 preserves stable delivery identities. Preserve this typed outbox. |
 | Merge `password_reset_history` with password-change audit | The reset ledger predates V17 and enforces a quota. The later audit has request context and both CHANGE/RESET sources; earlier reset rows have no corresponding audit event. Preserve both distinct responsibilities and complete current-month reset history. |
-| Combine the three email outboxes | Request mail, encrypted expiring recovery mail and password-change confirmation have different payloads, leases and cleanup rules. They already use separate tables and queues; preserve that separation. |
+| Combine the four email outboxes | Request mail, encrypted expiring recovery/activation mail and password-change confirmation have different payloads, leases and cleanup rules. They already use separate tables and queues; preserve that separation. |
 | Combine private/public progress or operations | Account-private and workspace-shared identities and authorization differ. Their tables are already distinct and use a closed internal service scope enum. Preserve each pair. |
 | Separate features into PostgreSQL databases | Account/password/session/audit changes, request acceptance and document operations rely on atomic cross-table transactions and FKs. Compose's single database supports these boundaries; no additional database is needed. |
 
@@ -84,10 +86,11 @@ migration files alone while preserving the existing code and behavior.
 | V17 | Separates persistent password audit from disposable confirmation delivery receipts. |
 | V18 | Adds successful login audit and cursor indexes for both histories. Its applied checksum remains `22842503`. |
 | V19 | Removes audit-to-workspace FK locks through a forward migration; retains rows, receipt ownership and original migration history. |
+| V20 | Adds pending/verified owner status and independent activation token/outbox tables; preserves older accounts, sessions and migration checksums. |
 
 Repeated `ALTER TABLE` statements express transitions from older populated
 schemas. Folding them into the original `CREATE TABLE`, renumbering files or
-replacing V1–V19 with one migration would invalidate already-applied history.
+replacing V1–V20 with one migration would invalidate already-applied history.
 Development installations with a persistent database have the same constraint.
 
 ## Compose and development databases
@@ -99,7 +102,7 @@ does not replay application migrations or require one database per table.
 `POSTGRES_DB` and `POSTGRES_USER` initialize an empty data directory and do not
 rename databases/accounts already stored in the volume.
 
-Existing installations should keep the V1–V19 files unchanged and use a new
+Existing installations should keep the V1–V20 files unchanged and use a new
 version for further schema changes. A fresh disposable database can apply the
 entire existing chain. A consolidated development baseline would be a separate
 workflow for an explicitly new empty database, with schema/seed equivalence

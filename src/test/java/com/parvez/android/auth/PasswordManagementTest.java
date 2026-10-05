@@ -43,7 +43,7 @@ class PasswordManagementTest {
     @BeforeEach void setup() {
         mvc = webAppContextSetup(context).apply(springSecurity()).build();
         email = "password-" + UUID.randomUUID() + "@example.com";
-        accounts.register(new WorkspaceAccounts.Signup("Password test", email, old));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Password test", email, old));
         when(mail.createMimeMessage()).thenAnswer(invocation -> new MimeMessage(Session.getInstance(new Properties())));
     }
     @Test void changeRevokesAllSessionsAndValidatesCurrentPassword() throws Exception {
@@ -318,7 +318,7 @@ class PasswordManagementTest {
 
     @Test void changeCapturesConnectionAndBoundedClientMetadataForAffectedWorkspaceOnly() throws Exception {
         String other = "other-change-" + UUID.randomUUID() + "@example.com";
-        accounts.register(new WorkspaceAccounts.Signup("Other workspace", other, old));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Other workspace", other, old));
         String agent = "Mozilla/5.0 (Windows NT 10.0) Chrome/140.0 Safari/537.36 Edg/140.0 " + "x".repeat(600);
         mvc.perform(post("/api/auth/change-password")
                 .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic(email, old))

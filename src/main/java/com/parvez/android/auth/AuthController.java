@@ -32,12 +32,13 @@ public class AuthController {
     @Operation(summary = "Log in with account credentials", security = {},
             description = "Public endpoint for workspace owners and Super Admin. Email is normalized to lowercase. "
                     + "Returns Bearer access and refresh tokens with lifetimes in seconds. Responses are never cached; "
-                    + "invalid passwords and unknown emails return the same 401. Successful token issuance atomically records "
+                    + "invalid passwords and unknown emails return the same 401. Correct credentials for a pending owner return 403 Email activation is required. Successful token issuance atomically records "
                     + "account/workspace, database time, connection IP and bounded optional User-Agent with inferred browser/device. "
                     + "Failed logins, refreshes and ordinary Basic-authenticated requests do not create login history. "
                     + "History is available to the owning workspace and Super Admin through the audit APIs.")
     @ApiResponse(responseCode = "200", description = "Authenticated; store tokens securely",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = TokenService.Tokens.class)))
+    @ApiResponse(responseCode = "403", description = "Correct credentials, but email activation is required", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @PostMapping("/login")
     public ResponseEntity<TokenService.Tokens> login(@Valid @RequestBody Login request, HttpServletRequest servletRequest) {
         return response(tokens.login(request.email(), request.password(), PasswordChangeContext.from(servletRequest)));

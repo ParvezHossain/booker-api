@@ -21,7 +21,7 @@ Review API.md sections 1–5 and 16–17. Inspect the Angular repository without
 
 Target stable Angular >=22 and Node 24. Verify exact official release compatibility; Node 24 must satisfy the selected Angular patch's engine requirements. Propose standalone feature boundaries, lazy routes, responsive accessible UI, typed API services, auth/refresh strategy, PDF transport, reading synchronization, and test strategy.
 
-Produce a route/access matrix for unauthenticated users, workspace owners and Super Admin; an endpoint-to-feature matrix covering all 47 business operations; likely files and dependency choices; and work itemd acceptance criteria. Treat health as optional operational integration, the denied legacy root as unsupported, and backend callback as browser navigation rather than an Angular API call.
+Produce a route/access matrix for unauthenticated users, workspace owners and Super Admin; an endpoint-to-feature matrix covering all 49 business operations; likely files and dependency choices; and work itemd acceptance criteria. Treat health as optional operational integration, the denied legacy root as unsupported, and backend callback as browser navigation rather than an Angular API call.
 
 Explicitly identify missing private update/delete, /me/role discovery, pagination, billing and signed URLs. Login tokens do not establish a documented frontend role claim. Propose separate user/admin entry flows with server-authoritative permissions rather than inventing role detection. Explain same-origin Drive cookie handoff and authenticated PDF Range requirements.
 
@@ -57,7 +57,7 @@ Add HTTP tests proving representative methods, paths, body shapes, nullable deco
 
 **Requirements and verification:**
 
-Read API.md sections 2 and 6. Implement signup and login forms with documented validation, token/session management, logout, functional bearer interceptor and navigation guards. Signup creates a workspace owner but does not return login tokens; use a documented login step afterward.
+Read API.md sections 2 and 6. Implement signup and login forms with documented validation, token/session management, logout, functional bearer interceptor and navigation guards. Signup creates a workspace owner but does not return login tokens; activate the owner email through POST auth/activate before login.
 
 Implement single-flight rotating refresh, atomic replacement of both tokens, bounded one-time request retry and no refresh recursion. Scope Authorization to protected configured backend APIs. Use a documented token-storage choice; never fabricate an HttpOnly refresh-cookie contract. If sessions are shared across tabs, coordinate rotation and logout across tabs. Treat an ambiguous refresh network failure without repeatedly consuming the old token.
 
@@ -258,3 +258,16 @@ Document supported Angular/Node versions, install/start/test/build commands, pub
 Provide route and endpoint coverage, owner/admin access behavior, token-storage limitations, PDF library/transport choice, reading conflict/offline strategy, Google Drive flow, tests actually run and a live deployment smoke checklist. Include unresolved /me-role discovery, unsupported backend features and any external OAuth configuration as explicit gaps where applicable.
 
 Deliver a concise summary of implemented features, architecture, changed files, configuration required, validation and remaining TODOs. Do not claim deployment, live OAuth, large-file performance or real authorization tests succeeded unless they were actually exercised.
+
+## Email activation adaptation
+
+New signup returns activationRequired=true and activationExpiresAt; route to a pending
+activation screen without logging in or opening authenticated features. Support token
+entry, explicit POST /api/auth/activate, empty 204 followed by login, and generic
+POST /api/auth/resend-activation with a 60-second UX cooldown. Handle pending login
+403 separately from unrelated role errors. Optional trusted HTTPS landing links carry
+token/expiry in the fragment; remove it from browser history after extraction, keep
+the token transient and never redeem on GET/load. Expiry/resend/replay/network failures
+must offer sign-in or resend recovery. Existing accounts continue to log in. See
+[activation contract](docs/email-activation.md) and [Android handoff](docs/android-email-activation-gemini.md)
+for shared HTTP semantics; implement within the real Angular architecture and test it.

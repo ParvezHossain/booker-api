@@ -10,7 +10,7 @@ possible client choices, not verified dependencies in this backend repository.
 the target deployment when generating a client; this document does not maintain a
 second hand-authored OpenAPI snapshot. Architecture/configuration and provider
 constraints are in [PDF reading](docs/book-reading.md) and
-[operations](docs/operations.md). There are 47 implemented business operations.
+[operations](docs/operations.md). There are 49 implemented business operations.
 
 ## Contract invariants
 
@@ -21,7 +21,7 @@ constraints are in [PDF reading](docs/book-reading.md) and
 - Book metadata is `title`, `author`, `publishedDate`, nullable `description`, manual
   `completed`. Private metadata has no update/delete route. Public management requires
   Super Admin; that account cannot access private/workspace progress.
-- Prefer Bearer sessions with serialized single-use refresh. Signup issues no tokens.
+- Prefer Bearer sessions with serialized single-use refresh. Signup issues no sessions and new owners require email activation; 204 activation is followed by login.
   Password change/reset invalidates earlier account sessions. Basic remains supported.
 - Stream uploads/downloads with bounded buffers and Long byte counters. Preserve
   exact file bytes and UUID Idempotency-Key on uncertain retry; upload cancellation
@@ -79,10 +79,10 @@ Tests: wire JSON field names/nulls/Long values, explicit version zero, correct U
 
 **Requirements and acceptance tests:**
 
-For a client using Basic-only sign-in, migrate the workflow to POST auth/login, then GET workspace and books. Signup 201 is followed by login; preserve account-already-created state if that login fails. Add a session coordinator shared by Retrofit, SSE and downloads. Refresh tokens rotate: persist the replacement pair atomically before retrying dependent work. Enforce single-flight refresh across concurrent requests, recognize when another request already replaced the token, cap authentication retries, and use a refresh client that cannot recursively authenticate or deadlock the same executor. Distinguish auth rejection from transient refresh network/503 errors.
+For a client using Basic-only sign-in, migrate the workflow to POST auth/login, then GET workspace and books. Signup 201 now opens email activation when activationRequired=true; consume the emailed token through POST auth/activate before login. Add generic POST auth/resend-activation, configurable UTC expiry display, explicit confirmation and login-403 routing. Preserve pending-account state without storing passwords/tokens. See the complete [Gemini activation handoff](docs/android-email-activation-gemini.md). Add a session coordinator shared by Retrofit, SSE and downloads. Refresh tokens rotate: persist the replacement pair atomically before retrying dependent work. Enforce single-flight refresh across concurrent requests, recognize when another request already replaced the token, cap authentication retries, and use a refresh client that cannot recursively authenticate or deadlock the same executor. Distinguish auth rejection from transient refresh network/503 errors.
 Attach Bearer only to the configured trusted API origin. No password storage, credential logging, query tokens or authorization forwarded to arbitrary redirect hosts. In-memory session remains the default. If adding explicit Remember me, use a reviewed Android Keystore-backed design compatible with the actual SDK and exclude tokens from backup; do not blindly introduce deprecated persistence APIs. Without remembered login, background jobs defer until reauthentication after process death. A lost refresh response may consume the old token; handle re-login instead of an infinite refresh loop.
 On logout, attempt auth/logout with the latest refresh token, then clear local session regardless of network result. Explain server access JWTs remain valid until expiry. Serialize logout against refresh and block late old-session callbacks using a session generation. Cancel SSE/network/jobs and hide account-scoped UI immediately. Keep pending offline progress inaccessible to other accounts; offer explicit discard on logout rather than silently losing unsynced reading. Restore it only after verifying the same account/workspace. Do not fall back silently to Basic after a Bearer failure.
-Tests: signup/login, invalid credentials, ten simultaneous 401s causing one refresh, token rotation, transient failure, consumed refresh, logout during refresh, and account switch during a delayed response.
+Tests: pending signup/activation/resend/expiry/replay, activation-required login 403, ordinary login, invalid credentials, ten simultaneous 401s causing one refresh, token rotation, transient failure, consumed refresh, logout during refresh, and account switch during a delayed response.
 
 ### 4 — Preserve catalogue, workspace, SSE, and notifications
 

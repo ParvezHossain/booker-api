@@ -67,9 +67,9 @@ class AuthHistoryIntegrationTest {
         member = "audit-member-" + suffix + "@example.com";
         other = "audit-other-" + suffix + "@example.com";
         admin = "audit-admin-" + suffix + "@example.com";
-        workspace = (UUID) accounts.register(new WorkspaceAccounts.Signup("Audit workspace", owner, old)).get("workspaceId");
+        workspace = com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Audit workspace", owner, old)).workspaceId();
         jdbc.update("INSERT INTO workspace_users(email,password_hash,workspace_id) SELECT ?,password_hash,workspace_id FROM workspace_users WHERE email=?", member, owner);
-        otherWorkspace = (UUID) accounts.register(new WorkspaceAccounts.Signup("Other audit workspace", other, old)).get("workspaceId");
+        otherWorkspace = com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Other audit workspace", other, old)).workspaceId();
         accounts.provisionSuperAdmin(admin, old);
     }
     @AfterEach void clearAuthentication() { SecurityContextHolder.clearContext(); }

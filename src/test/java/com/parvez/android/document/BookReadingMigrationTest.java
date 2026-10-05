@@ -95,7 +95,7 @@ class BookReadingMigrationTest {
             var tokens = jdbc.queryForList("SELECT * FROM password_reset_tokens");
             var sessions = jdbc.queryForList("SELECT * FROM refresh_tokens");
             migrate(schema.name(), null);
-            assertEquals(users, jdbc.queryForList("SELECT * FROM workspace_users ORDER BY email"));
+            assertEquals(users, jdbc.queryForList("SELECT email,password_hash,workspace_id,created_at,role,credential_version FROM workspace_users ORDER BY email"));
             assertEquals(tokens, jdbc.queryForList("SELECT * FROM password_reset_tokens"));
             assertEquals(sessions, jdbc.queryForList("SELECT * FROM refresh_tokens"));
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_reset_history", Integer.class));
@@ -187,8 +187,8 @@ class BookReadingMigrationTest {
             var receipts = jdbc.queryForList("SELECT * FROM password_change_emails");
             var appliedHistory = jdbc.queryForList("SELECT * FROM flyway_schema_history ORDER BY installed_rank");
             flyway(schema.name(), "18").validate();
-            assertEquals(1, flyway(schema.name(), null).migrate().migrationsExecuted);
-            flyway(schema.name(), null).validate();
+            assertEquals(1, flyway(schema.name(), "19").migrate().migrationsExecuted);
+            flyway(schema.name(), "19").validate();
             assertEquals(logins, jdbc.queryForList("SELECT * FROM login_history"));
             assertEquals(changes, jdbc.queryForList("SELECT * FROM password_change_history"));
             assertEquals(receipts, jdbc.queryForList("SELECT * FROM password_change_emails"));
@@ -201,7 +201,45 @@ class BookReadingMigrationTest {
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM login_history", Integer.class));
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_change_history", Integer.class));
             assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_change_emails", Integer.class));
-            assertEquals(0, flyway(schema.name(), null).migrate().migrationsExecuted);
+            assertEquals(0, flyway(schema.name(), "19").migrate().migrationsExecuted);
+        });
+    }
+
+    @Test void activationUpgradePreservesExistingAccountsAndCreatesIndependentChallenges() throws Exception {
+        inSchema(schema -> {
+            migrate(schema.name(), "19");
+            var jdbc = schema.jdbc();
+            UUID workspace = UUID.randomUUID();
+            String owner = "legacy-owner@example.com", admin = "legacy-admin@example.com";
+            jdbc.update("INSERT INTO workspaces(id,name) VALUES (?,'Legacy activation upgrade')", workspace);
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,workspace_id) VALUES (?,'test-only',?)", owner, workspace);
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,role) VALUES (?,'admin-only','SUPER_ADMIN')", admin);
+            jdbc.update("INSERT INTO refresh_tokens(token_hash,email,expires_at) VALUES (?,?,clock_timestamp()+interval '1 day')", "a".repeat(64), owner);
+            var accounts = jdbc.queryForList("SELECT * FROM workspace_users ORDER BY email");
+            var sessions = jdbc.queryForList("SELECT * FROM refresh_tokens");
+            var applied = jdbc.queryForList("SELECT * FROM flyway_schema_history ORDER BY installed_rank");
+            assertEquals(1, flyway(schema.name(), null).migrate().migrationsExecuted);
+            flyway(schema.name(), null).validate();
+            var upgraded = jdbc.queryForList("SELECT * FROM workspace_users ORDER BY email");
+            for (int i = 0; i < accounts.size(); i++) {
+                var before = accounts.get(i); var after = upgraded.get(i);
+                before.forEach((key, value) -> assertEquals(value, after.get(key)));
+                assertEquals(true, after.get("email_verified")); assertNull(after.get("email_verified_at"));
+            }
+            assertEquals(sessions, jdbc.queryForList("SELECT * FROM refresh_tokens"));
+            assertEquals(applied, jdbc.queryForList("SELECT * FROM flyway_schema_history WHERE version <> '20' ORDER BY installed_rank"));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM email_activation_tokens", Integer.class));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM email_activation_emails", Integer.class));
+            String pending = "new-pending@example.com";
+            jdbc.update("INSERT INTO workspace_users(email,password_hash,workspace_id,email_verified) VALUES (?,'test-only',?,FALSE)", pending, workspace);
+            UUID receipt = UUID.randomUUID();
+            jdbc.update("INSERT INTO email_activation_tokens(email,token_hash,expires_at) VALUES (?,?,clock_timestamp()+interval '1 day')", pending, "b".repeat(64));
+            jdbc.update("INSERT INTO email_activation_emails(id,email,token_hash,encrypted_token,expires_at) VALUES (?,?,?,'test-only-ciphertext',clock_timestamp()+interval '1 day')", receipt, pending, "b".repeat(64));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("UPDATE email_activation_emails SET lease_id=? WHERE id=?", UUID.randomUUID(), receipt));
+            assertThrows(DataIntegrityViolationException.class, () -> jdbc.update("UPDATE workspace_users SET email_verified_at=clock_timestamp() WHERE email=?", pending));
+            jdbc.update("DELETE FROM workspace_users WHERE email=?", pending);
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM email_activation_tokens", Integer.class));
+            assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM email_activation_emails", Integer.class));
         });
     }
 
@@ -222,7 +260,7 @@ class BookReadingMigrationTest {
             var receipts = jdbc.queryForList("SELECT * FROM password_reset_emails");
             var sessions = jdbc.queryForList("SELECT * FROM refresh_tokens");
             migrate(schema.name(), null);
-            assertEquals(accounts, jdbc.queryForList("SELECT * FROM workspace_users"));
+            assertEquals(accounts, jdbc.queryForList("SELECT email,password_hash,workspace_id,created_at,role,credential_version FROM workspace_users"));
             assertEquals(tokens, jdbc.queryForList("SELECT * FROM password_reset_tokens"));
             assertEquals(history, jdbc.queryForList("SELECT * FROM password_reset_history"));
             assertEquals(receipts, jdbc.queryForList("SELECT * FROM password_reset_emails"));

@@ -71,7 +71,7 @@ class PublicLibraryIntegrationTest {
         SecurityContextHolder.clearContext();
     }
     private WorkspacePrincipal signup(String email) {
-        accounts.register(new WorkspaceAccounts.Signup("Public reader", email, password));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Public reader", email, password));
         return (WorkspacePrincipal) accounts.loadUserByUsername(email);
     }
     private void authenticate(WorkspacePrincipal user) {

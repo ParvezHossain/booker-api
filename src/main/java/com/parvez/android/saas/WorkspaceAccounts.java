@@ -7,35 +7,47 @@ import org.springframework.security.core.userdetails.*;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.parvez.android.auth.EmailActivationService;
+
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
-/** Account provisioning and lookup; HTTP contracts live in WorkspaceController. */
+/**
+ * Account provisioning and lookup; HTTP contracts live in WorkspaceController.
+ */
 @Service
 public class WorkspaceAccounts implements UserDetailsService {
     private final JdbcTemplate jdbc;
     private final PasswordEncoder passwords;
-    public WorkspaceAccounts(JdbcTemplate jdbc, PasswordEncoder passwords) {
+    private final EmailActivationService activation;
+
+    public WorkspaceAccounts(JdbcTemplate jdbc, PasswordEncoder passwords, EmailActivationService activation) {
         this.jdbc = jdbc;
         this.passwords = passwords;
+        this.activation = activation;
     }
+
     @Override
     public UserDetails loadUserByUsername(String email) {
-        return jdbc.query("SELECT email, password_hash, workspace_id, role FROM workspace_users WHERE email = ?",
-                (rs, row) -> new WorkspacePrincipal(rs.getString(1), rs.getString(2), rs.getObject(3, UUID.class), rs.getString(4)),
-                email.strip().toLowerCase(Locale.ROOT)).stream().findFirst()
+        return jdbc.query("SELECT email, password_hash, workspace_id, role, email_verified FROM workspace_users WHERE email = ?",
+                        (rs, row) -> new WorkspacePrincipal(rs.getString(1), rs.getString(2), rs.getObject(3, UUID.class), rs.getString(4), rs.getBoolean(5)),
+                        email.strip().toLowerCase(Locale.ROOT)).stream().findFirst()
                 .orElseThrow(() -> new UsernameNotFoundException("Invalid credentials"));
     }
+
     @Transactional
-    public Map<String, Object> register(Signup request) {
+    public Registration register(Signup request) {
         UUID id = UUID.randomUUID();
         String email = request.email().strip().toLowerCase(Locale.ROOT);
         jdbc.update("INSERT INTO workspaces (id, name) VALUES (?, ?)", id, request.workspaceName().strip());
-        jdbc.update("INSERT INTO workspace_users (email, password_hash, workspace_id) VALUES (?, ?, ?)",
+        jdbc.update("INSERT INTO workspace_users (email, password_hash, workspace_id, email_verified) VALUES (?, ?, ?, FALSE)",
                 email, passwords.encode(request.password()), id);
-        return Map.of("workspaceId", id, "workspaceName", request.workspaceName().strip(), "email", email, "plan", "FREE");
+        Instant expiresAt = activation.issue(email);
+        return new Registration(id, request.workspaceName().strip(), email, "FREE", true, expiresAt);
     }
+
     @Transactional
     public void provisionSuperAdmin(String email, String password) {
         String normalized = email.strip().toLowerCase(Locale.ROOT);
@@ -50,12 +62,22 @@ public class WorkspaceAccounts implements UserDetailsService {
         jdbc.update("INSERT INTO workspace_users (email, password_hash, workspace_id, role) VALUES (?, ?, NULL, 'SUPER_ADMIN')",
                 normalized, passwords.encode(password));
     }
+
     public Map<String, Object> current() {
         return jdbc.queryForMap("SELECT id, name, plan, book_limit, (SELECT count(*) FROM books WHERE workspace_id = w.id) AS books_used FROM workspaces w WHERE id = ?",
                 WorkspacePrincipal.currentWorkspace());
     }
-    @Schema(name = "WorkspaceSignup", description = "Create an empty workspace and its owner account")
-    public record Signup(@Schema(example="My Library") @NotBlank @Size(max=100) String workspaceName,
-                         @Schema(description="Unique owner email; normalized to lowercase", example="owner@example.com") @NotBlank @Email @Size(max=254) String email,
-                         @Schema(format="password", accessMode=Schema.AccessMode.WRITE_ONLY, description="12–64 characters", example="replace-this-password") @NotBlank @Size(min=12, max=64) String password) {}
+
+    @Schema(name = "SignupResponse")
+    public record Registration(UUID workspaceId, String workspaceName, String email,
+                               @Schema(allowableValues = {"FREE"}) String plan,
+                               @Schema(description = "True for new signups; activate before login") boolean activationRequired,
+                               @Schema(description = "ISO-8601 UTC expiry of the queued activation token") Instant activationExpiresAt) {
+    }
+
+    @Schema(name = "WorkspaceSignup", description = "Create an empty workspace and pending owner; email activation is required")
+    public record Signup(@Schema(example = "My Library") @NotBlank @Size(max = 100) String workspaceName,
+                         @Schema(description = "Unique owner email; normalized to lowercase", example = "owner@example.com") @NotBlank @Email @Size(max = 254) String email,
+                         @Schema(format = "password", accessMode = Schema.AccessMode.WRITE_ONLY, description = "12–64 characters", example = "replace-this-password") @NotBlank @Size(min = 12, max = 64) String password) {
+    }
 }

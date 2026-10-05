@@ -63,7 +63,7 @@ Access labels used below:
 
 Private books are scoped to the authenticated workspace. Private progress and Drive import jobs are scoped to the authenticated email; public-library progress is shared by the current workspace. Cross-workspace private IDs and wrong-library IDs return 404. No workspace/user selection header or request field is accepted by the documented DTOs. The term “public library” means global catalogue availability to authenticated accounts, not anonymous downloads.
 
-Signup creates an OWNER in a FREE workspace. SUPER_ADMIN provisioning uses backend bootstrap settings; no signup/admin role assignment endpoint exists. Super Admin can manage/read public metadata/PDFs but cannot access private books or workspace progress.
+Signup creates a pending OWNER in a FREE workspace; email activation is required before authentication. SUPER_ADMIN provisioning uses backend bootstrap settings; no signup/admin role assignment endpoint exists. Super Admin can manage/read public metadata/PDFs but cannot access private books or workspace progress.
 
 ## 3. Common conventions and errors
 
@@ -207,6 +207,8 @@ Endpoint examples and field tables below reference these reusable schemas. Array
 | workspaceName | String | Trimmed workspace name. |
 | email | String | Normalized owner email. |
 | plan | String | FREE on signup. |
+| activationRequired | Boolean | True for new signups; activate before login. |
+| activationExpiresAt | ISO-8601 UTC timestamp | Issued activation token expiry; default one day, configurable. |
 
 ### WorkspaceResponse
 
@@ -278,11 +280,13 @@ Endpoint examples and field tables below reference these reusable schemas. Array
 
 ## 5. Endpoint inventory
 
-**47 business operations**, plus the password-token copy page, Actuator health and one denied legacy root mapping: **50 method/path entries** below. Implicit framework HEAD/OPTIONS handling, Swagger assets and framework error dispatch are not additional business APIs. Each entry has a detailed section.
+**49 business operations**, plus the password-token copy page, Actuator health and one denied legacy root mapping: **52 method/path entries** below. Implicit framework HEAD/OPTIONS handling, Swagger assets and framework error dispatch are not additional business APIs. Each entry has a detailed section.
 
 | Method | Endpoint | Access | Purpose |
 | --- | --- | --- | --- |
 | POST | `/api/auth/signup` | No | Create workspace and owner |
+| POST | `/api/auth/activate` | No | Activate pending owner email with a single-use token |
+| POST | `/api/auth/resend-activation` | No | Request a replacement activation email |
 | POST | `/api/auth/login` | No | Log in |
 | POST | `/api/auth/refresh` | No | Rotate refresh token |
 | POST | `/api/auth/logout` | No | Log out |
@@ -380,6 +384,7 @@ curl -i -X POST "${API_BASE}/api/auth/signup" \
 ```http
 HTTP/1.1 201 Created
 Content-Type: application/json
+Cache-Control: no-store
 ```
 
 ```json
@@ -387,7 +392,9 @@ Content-Type: application/json
   "workspaceId": "33333333-3333-4333-8333-333333333333",
   "workspaceName": "My Library",
   "email": "owner@example.com",
-  "plan": "FREE"
+  "plan": "FREE",
+  "activationRequired": true,
+  "activationExpiresAt": "2026-10-05T12:00:00Z"
 }
 ```
 
@@ -399,10 +406,11 @@ Content-Type: application/json
 | --- | --- |
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
 | 409 | Email already registered / database constraint; transaction rolls back. |
+| 503 | Activation encryption not configured; workspace/account/token/receipt insertion all roll back. |
 
 **Business / implementation notes**
 
-Creates an empty FREE workspace with a 100-book limit. Does not return tokens; log in separately. Roles cannot be selected by signup.
+Creates an empty FREE workspace with a 100-book limit and a pending owner. Workspace, account, activation digest and encrypted delivery receipt commit atomically; network I/O is asynchronous. Activate through section 6.9 before login. Signup issues no session or raw token. Roles cannot be selected. Default activation lifetime is one day via EMAIL_ACTIVATION_TTL. Existing accounts retain access during V20 upgrade.
 
 ### 6.2 Log in
 
@@ -467,6 +475,7 @@ Content-Type: application/json
 | Status | Condition |
 | --- | --- |
 | 400 | Invalid/missing request fields, typed IDs, required parameters, headers or multipart parts (as applicable). |
+| 403 | Correct credentials for a pending owner; ApiError message is Email activation is required. |
 | 401 | Unknown email or incorrect password: Invalid credentials or refresh token. |
 
 **Business / implementation notes**
@@ -480,6 +489,8 @@ Super Admin read APIs are described in [section 7.2](#72-account-security-histor
 
 
 OWNER and SUPER_ADMIN use the same login. Each login creates an independent refresh session. Cache-Control: no-store; Pragma: no-cache.
+
+Pending accounts issue no sessions or successful-login audit. Basic requests from pending accounts return 401; Bearer decoding and refresh require active status. Password recovery does not activate pending accounts.
 
 ### 6.3 Rotate refresh token
 
@@ -851,6 +862,100 @@ Old links with no usable expiry metadata still allow copying and show expiry as
 unavailable. The page never queries validity, consumes a token or changes a password. If clipboard
 access is unavailable, it offers selected text for manual copying. No account login
 is needed. The existing POST reset endpoint still performs all validation.
+
+### 6.9 Workspace email activation
+
+New signup creates a pending owner and queues encrypted activation mail atomically.
+It must be activated before login or protected Basic/Bearer access. Existing accounts
+retain access during V20; the migration does not retroactively prove mailbox ownership.
+Default activation lifetime is one day from issuance, configurable through
+`EMAIL_ACTIVATION_TTL=PT24H` (one minute to seven days). Queue waits/retries do not
+extend deadlines. Expiry leaves the workspace pending; it does not delete data.
+
+**Activate owner email**
+
+```http
+POST /api/auth/activate
+Content-Type: application/json
+```
+
+Public endpoint; no Authorization header is needed. The JSON body contains only
+the 43-character case-sensitive URL-safe activation token:
+
+```json
+{"token":"<activation-token>"}
+```
+
+| Field | Type | Required | Contract |
+| --- | --- | --- | --- |
+| token | String | Yes | Nonblank; exactly 43 characters matching [A-Za-z0-9_-]{43}; write-only. Account/workspace is derived from its digest, never a client selector. |
+
+```sh
+curl -i -X POST "$API_BASE/api/auth/activate" \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"<activation-token>"}'
+```
+
+Success is **204 No Content**, `Cache-Control: no-store`, with no body or session.
+The current token is consumed under the account row lock, the verification time
+is recorded and pending delivery receipts are removed atomically. Activation changes
+neither password nor role. Log in afterward with the signup password. Invalid,
+expired, replaced and already-used tokens return the same **400 ApiError** with
+`message: "Activation token is invalid or expired"`; malformed fields also return 400.
+Activation tokens cannot be exchanged for password-reset tokens.
+
+**Request replacement activation email**
+
+```http
+POST /api/auth/resend-activation
+Content-Type: application/json
+```
+
+Public endpoint; accepts:
+
+```json
+{"email":"owner@example.com"}
+```
+
+| Field | Type | Required | Contract |
+| --- | --- | --- | --- |
+| email | String | Yes | Nonblank valid email syntax, maximum 254 characters; normalized to lowercase. |
+
+```sh
+curl -i -X POST "$API_BASE/api/auth/resend-activation" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"owner@example.com"}'
+```
+
+Success is generic **202 Accepted**, empty body, `Cache-Control: no-store`, for
+pending, active and unknown accounts. Only eligible pending accounts get a replacement
+after a server-enforced 60-second issuance cooldown. A replacement invalidates all
+earlier activation tokens and starts a new configured lifetime without recreating
+the workspace or changing its password. The response has no new expiry or delivery
+guarantee. Invalid fields return **400 ApiError**. Missing activation encryption
+configuration returns **503 ApiError** for all requests before account lookup.
+
+Correct credentials for a pending owner return **403** from POST login with
+`message: "Email activation is required"`; wrong credentials remain generic 401.
+Basic requests return 401 for pending owners; Bearer decoding/refresh require active
+status. Pending owners receive no password-reset issuance through forgot-password,
+and password recovery never activates email. Prefer resend activation for this state.
+
+The UTF-8 HTML/plain-text email contains a copyable token and original expiry in
+`EMAIL_ACTIVATION_TIME_ZONE` (default Asia/Dhaka). Optional `EMAIL_ACTIVATION_URL`
+adds a client app/landing button carrying token and epoch-ms expiry in the URL
+fragment. This must be a trusted HTTPS URL with no credentials/query/fragment.
+Opening a link never activates an account; the client must explicitly POST after
+confirmation. No activation GET page/web fallback is implemented in this backend.
+
+Only digests and AES-GCM protected short-lived tokens are persisted. The dedicated
+RabbitMQ queue carries opaque UUID receipt IDs, with confirmed bounded publication,
+short fenced leases, SMTP outside transactions, delayed retries, parking and bounded
+stale/expiry cleanup. Signup with configured encryption still commits pending mail
+when SMTP is unavailable or delivery is paused; the owner cannot authenticate until
+activation. Signup without encryption returns 503 and rolls back everything.
+See [workflow/configuration](docs/email-activation.md) and
+[Gemini Android adaptation instructions](docs/android-email-activation-gemini.md).
 
 ## 7. Workspace
 
@@ -3739,7 +3844,7 @@ Mapping remains in controller and may appear in OpenAPI, but no successful publi
 
 ### Account lifecycle
 
-1. POST signup creates workspace/owner; POST login obtains access/refresh JWTs.
+1. POST signup creates a pending workspace owner and queues activation mail; POST activate consumes the emailed token, then POST login obtains access/refresh JWTs.
 2. Send access JWT on protected APIs; GET workspace returns plan/usage.
 3. Refresh once per expired session request group, replacing both tokens atomically. A concurrent refresh with the same old token loses with 401.
 4. Logout revokes one refresh token and clear client credentials. Change/reset password invalidates all earlier account sessions; log in again.
@@ -3859,10 +3964,11 @@ covered in [PDF reading](docs/book-reading.md).
 | Public library/requests | library/PublicBookController.java, PublicBookService.java, PublicLibraryRequestController.java, PublicLibraryRequestService.java, PublicLibraryBookRequest.java. |
 | SSE | controller/BookNotificationController.java, notification/BookEventStream.java, BookEventStore.java; Flyway event triggers. |
 | Account security history | auth/LoginAudit.java, AuthHistoryController.java, AuthHistoryService.java; Flyway V17/V18 context audit and cursor indexes; V19 workspace snapshots. |
+| Workspace activation | auth/EmailActivationService.java, EmailActivationController.java, EmailActivationEmailWorker.java and dedicated queue; Flyway V20 status, activation digest and encrypted outbox. |
 | Security/errors/OpenAPI | config/SecurityConfig.java, OpenApiConfig.java; exception/GlobalExceptionHandler.java; dto/ApiError.java. |
 | Runtime configuration | src/main/resources/application.properties; src/main/resources/db/migration/. |
 
-Java paths in this table are relative to `src/main/java/com/parvez/android/`. Source contracts were cross-checked against existing test cases including OpenApiCoverageTest (47 business mappings), TokenAuthenticationTest, AuthHistoryIntegrationTest, PasswordManagementTest, WorkspaceIsolationTest, BookReadingIntegrationTest, BookDocumentHeadTest, ReadingCompletionTest, PublicLibraryIntegrationTest, PublicUploadHttpTest, PublicLibraryRequestIntegrationTest, GoogleDriveIntegrationTest/GatewayTest, and notification controller/stream/persistence tests. Tests check route coverage; they do not establish live provider or frontend behavior.
+Java paths in this table are relative to `src/main/java/com/parvez/android/`. Source contracts were cross-checked against existing test cases including OpenApiCoverageTest (49 business mappings), TokenAuthenticationTest, AuthHistoryIntegrationTest, PasswordManagementTest, WorkspaceIsolationTest, BookReadingIntegrationTest, BookDocumentHeadTest, ReadingCompletionTest, PublicLibraryIntegrationTest, PublicUploadHttpTest, PublicLibraryRequestIntegrationTest, GoogleDriveIntegrationTest/GatewayTest, and notification controller/stream/persistence tests. Tests check route coverage; they do not establish live provider or frontend behavior.
 
 When adding/changing routes, compare this inventory to all Spring mappings, security rules, DTO validation, service behavior and generated `/v3/api-docs`. Existing database-backed OpenApiCoverageTest compares Swagger to Spring's handler registry. Use a dedicated disposable PostgreSQL database for integration tests as explained in [README.md](README.md); tests mutate data.
 

@@ -30,7 +30,7 @@ class SuperAdminBootstrapTest {
     }
     @Test void configurationCannotPromoteAnExistingWorkspaceOwner() {
         String email = "existing-" + UUID.randomUUID() + "@example.com";
-        accounts.register(new WorkspaceAccounts.Signup("Existing", email, "owner-password-123"));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Existing", email, "owner-password-123"));
         assertThrows(IllegalStateException.class, () -> accounts.provisionSuperAdmin(email, "bootstrap-password-123"));
         assertEquals("OWNER", ((WorkspacePrincipal) accounts.loadUserByUsername(email)).getRole());
     }

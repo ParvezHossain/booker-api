@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Activate your Booker workspace</title></head>
+<body style="margin:0;padding:0;background:#f3f5f4;color:#192e2a;font-family:Arial,Helvetica,sans-serif;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">Confirm your email to activate your Booker workspace. Your activation token expires on {{expiresAt}}.</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f4;">
+    <tr><td align="center" style="padding:32px 16px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;table-layout:fixed;background:#ffffff;border:1px solid #e0e7e3;border-radius:16px;">
+        <tr><td style="padding:30px 24px 24px;border-bottom:1px solid #e8eeeb;">
+          <p style="margin:0;color:#174b43;font-size:25px;font-weight:bold;letter-spacing:-1px;">Booker<span style="color:#c29248;">.</span></p>
+          <p style="margin:7px 0 0;color:#697d75;font-size:11px;letter-spacing:2px;text-transform:uppercase;">Workspace activation</p>
+        </td></tr>
+        <tr><td style="padding:30px 24px;">
+          <span style="display:inline-block;padding:7px 11px;background:#edf6f0;border:1px solid #d2e7da;border-radius:20px;color:#235b43;font-size:11px;font-weight:bold;letter-spacing:0.7px;">CONFIRM YOUR EMAIL</span>
+          <h1 style="margin:18px 0 12px;font-size:28px;line-height:1.25;letter-spacing:-0.7px;">Your books deserve their own space.</h1>
+          <p style="margin:0 0 24px;color:#52665e;font-size:15px;line-height:1.7;">Welcome to Booker. Confirm this email address to activate <strong>{{workspaceName}}</strong> and start building your library.</p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;background:#f0f7f3;border:1px solid #cbded4;border-radius:10px;">
+            <tr><td style="padding:20px;">
+              <p style="margin:0 0 8px;color:#526b5e;font-size:12px;">Email address</p>
+              <p style="margin:0 0 20px;font-size:14px;overflow-wrap:anywhere;word-break:break-all;">{{email}}</p>
+              <h2 style="margin:0 0 12px;color:#174b43;font-size:16px;">Your activation token</h2>
+              <p style="margin:0;padding:14px;background:#ffffff;border:1px solid #d2e7da;border-radius:8px;color:#174b43;font-family:Consolas,'Courier New',monospace;font-size:15px;line-height:1.8;overflow-wrap:anywhere;word-break:break-all;">{{token}}</p>
+              <p style="margin:14px 0 0;color:#52665e;font-size:13px;line-height:1.7;">Copy this token into Booker’s activation screen. It works once and expires on <strong>{{expiresAt}}</strong>.</p>
+            </td></tr>
+          </table>
+          {{action}}
+          <p style="margin:24px 0 0;color:#52665e;font-size:14px;line-height:1.7;">After activation, sign in with the password you chose during signup. If the token has expired, request a new activation email from Booker.</p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;table-layout:fixed;background:#fff8ed;border:1px solid #ead8b7;border-radius:10px;">
+            <tr><td style="padding:18px 20px;">
+              <h2 style="margin:0 0 8px;color:#704c1d;font-size:16px;">Didn’t create this workspace?</h2>
+              <p style="margin:0;color:#705b3c;font-size:14px;line-height:1.7;">Ignore this email and do not share the token. Only activate a workspace you created. Your account cannot sign in until its email is activated.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:20px 24px;background:#fafbf9;border-top:1px solid #e8eeeb;border-radius:0 0 16px 16px;">
+          <p style="margin:0;color:#52665e;font-size:12px;line-height:1.7;">Keep your activation token private. Booker will never ask for your password or activation token in an email reply.</p>
+        </td></tr>
+      </table>
+      <p style="margin:20px 0 0;color:#7b8b82;font-size:12px;">Booker &nbsp;·&nbsp; Your books, your space.</p>
+    </td></tr>
+  </table>
+</body>
+</html>

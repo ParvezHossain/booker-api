@@ -94,6 +94,44 @@ Additional scheduled worker settings include Spring properties: `books.google-dr
 defaults to 1000 and has the `BOOK_REQUEST_EMAIL_POLL_MILLIS` alias; other email
 limits and broker recovery are documented in [queue operations](request-email-queue.md). Supply them through external Spring configuration when needed.
 
+### Workspace email activation
+
+New owners must activate an emailed token before login or Basic/Bearer access.
+Existing accounts are grandfathered by V20; no retrospective mail is sent.
+Configure EMAIL_ACTIVATION_EMAIL_ENCRYPTION_KEY with a new stable 32-byte base64
+key (openssl rand -base64 32), separate from JWT/recovery/Drive keys. Blank key
+rejects signup/resend with 503 and creates no orphan workspace/account. Missing
+SMTP/sender or a paused worker retains encrypted pending mail without activating
+the owner. Configure delivery before inviting users.
+
+| Setting | Default |
+| --- | --- |
+| EMAIL_ACTIVATION_TTL | PT24H; ISO-8601 duration, one minute to seven days; applies to future issuance |
+| EMAIL_ACTIVATION_FROM | PASSWORD_RESET_FROM fallback |
+| EMAIL_ACTIVATION_URL | Empty copyable-token mode; optional HTTPS client landing/app link with no query/fragment/credentials |
+| EMAIL_ACTIVATION_TIME_ZONE | Asia/Dhaka; email display only |
+| EMAIL_ACTIVATION_EMAIL_ENCRYPTION_KEY | Empty; required for atomic signup/resend acceptance |
+| EMAIL_ACTIVATION_EMAIL_ENABLED | true; pauses delivery only |
+| EMAIL_ACTIVATION_EMAIL_QUEUE | booker.email-activation-emails; distinct main/dead queue names |
+| EMAIL_ACTIVATION_EMAIL_POLL_MILLIS | 1000 |
+| EMAIL_ACTIVATION_EMAIL_BATCH_SIZE | 20 (1–100) |
+| EMAIL_ACTIVATION_EMAIL_QUEUE_LIMIT | 1000 (1–100000) |
+| EMAIL_ACTIVATION_EMAIL_MAX_ATTEMPTS | 5 (1–20) |
+| EMAIL_ACTIVATION_EMAIL_RETRY_SECONDS | 30 (1–3600); exponential delay capped at one hour |
+| EMAIL_ACTIVATION_EMAIL_REDISPATCH_SECONDS | 300 (30–86400) |
+| EMAIL_ACTIVATION_EMAIL_LEASE_SECONDS | 60 (30–3600) |
+
+All settings pass through Compose. The activation publisher has its own scheduler;
+SMTP runs outside short fenced claim/finalization transactions. Only receipt UUIDs
+enter the bounded quorum queue. Successful delivery preserves the token deadline;
+expired/replaced/consumed ciphertext is cleaned in bounded batches, including parked
+failures. No automatic pending-account deletion is implemented. See
+[activation workflow and rollout](email-activation.md), [table map](database-table-map.md)
+and [Gemini Android instructions](android-email-activation-gemini.md).
+Maven does not load .env; include a disposable activation key and disable activation
+delivery when running non-broker tests. Never test against the preserved development
+volume or use live SMTP recipients.
+
 ### Google Drive
 
 Enable Drive and Picker APIs in the same Cloud project and configure OAuth consent
@@ -247,6 +285,8 @@ export MANAGEMENT_OTLP_METRICS_EXPORT_URL=''
 export BOOK_REQUEST_EMAIL_ENABLED=false
 export PASSWORD_RESET_EMAIL_ENABLED=false
 export PASSWORD_CHANGE_EMAIL_ENABLED=false
+export EMAIL_ACTIVATION_EMAIL_ENABLED=false
+export EMAIL_ACTIVATION_EMAIL_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=
 export RABBITMQ_HOST=localhost
 export RABBITMQ_PORT=5673
 export RABBITMQ_USERNAME=booker_test
@@ -294,7 +334,7 @@ No registry publishing, deployment credentials or production deployment is confi
 Flyway migrations are immutable; Hibernate uses `ddl-auto=validate` and open-in-view
 is disabled. Current schema responsibilities:
 
-See the [table and migration map](database-table-map.md) for all 23 application
+See the [table and migration map](database-table-map.md) for all 25 application
 tables, their dependencies and the reasons existing shared tables stay shared.
 Each table is created once; later migrations evolve populated schemas. A
 persistent development volume retains Flyway history across container restarts.
@@ -319,6 +359,7 @@ persistent development volume retains Flyway history across container restarts.
 | V17 | Password-change account/workspace/context audit and leased confirmation outbox; preserves populated recovery state and sessions; no retroactive notifications |
 | V18 | Successful login history and cursor query indexes for login/password audit; preserves populated V17 audit/receipt/session data; no fabricated earlier logins |
 | V19 | Forward migration removes audit-to-workspace foreign keys to avoid reversed workspace/account lock ordering; preserves captured workspace UUIDs, audit/receipt rows and account deletion cascades |
+| V20 | Pending new owners, email verification status/time and separate encrypted activation token/outbox tables; preserves existing access/sessions and V1–V19 checksums |
 
 V18 is preserved at its original checksum `22842503`. If startup reports V18
 checksum mismatch with locally resolved `94587119`, update to the restored V18

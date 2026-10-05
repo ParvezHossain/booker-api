@@ -37,31 +37,31 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-@SpringBootTest(properties = {"books.requests.email.enabled=false", "app.password-reset.email.enabled=true",
+@SpringBootTest(properties = {"books.requests.email.enabled=false", "app.email-activation.email.enabled=true", "app.password-reset.email.enabled=false",
         "spring.datasource.hikari.maximum-pool-size=4",
-        "app.password-reset.email.poll-millis=3600000", "app.password-reset.email.listener-auto-startup=false",
-        "app.password-reset.email.queue-limit=10", "app.password-reset.email.retry-seconds=1",
-        "app.password-reset.email.max-attempts=2", "app.password-reset.from=booker@example.com",
-        "app.password-reset.email.encryption-key=QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=",
+        "app.email-activation.email.poll-millis=3600000", "app.email-activation.email.listener-auto-startup=false",
+        "app.email-activation.email.queue-limit=10", "app.email-activation.email.retry-seconds=1",
+        "app.email-activation.email.max-attempts=2", "app.email-activation.from=booker@example.com",
+        "app.email-activation.email.encryption-key=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
         "management.health.mail.enabled=false",
         "spring.autoconfigure.exclude=org.jobrunr.spring.autoconfigure.JobRunrAutoConfiguration,org.jobrunr.spring.autoconfigure.storage.JobRunrSqlStorageAutoConfiguration"})
-class PasswordResetEmailRabbitIntegrationTest {
-    static final String schema = "reset_rabbit_" + UUID.randomUUID().toString().replace("-", "");
-    static final String queue = "booker.password-reset-emails.tests." + UUID.randomUUID();
+class EmailActivationEmailRabbitIntegrationTest {
+    static final String schema = "activation_rabbit_" + UUID.randomUUID().toString().replace("-", "");
+    static final String queue = "booker.email-activation-emails.tests." + UUID.randomUUID();
     @DynamicPropertySource static void configuration(DynamicPropertyRegistry properties) {
         properties.add("spring.datasource.url", () -> System.getenv("DATABASE_URL") + "?currentSchema=" + schema);
         properties.add("spring.flyway.schemas", () -> schema);
         properties.add("spring.flyway.default-schema", () -> schema);
-        properties.add("app.password-reset.email.queue", () -> queue);
+        properties.add("app.email-activation.email.queue", () -> queue);
     }
     @Autowired JdbcTemplate jdbc;
     @Autowired WorkspaceAccounts accounts;
-    @Autowired PasswordService passwords;
-    @Autowired PasswordResetEmailPublisher publisher;
-    @Autowired PasswordResetEmailConsumer consumer;
-    @Autowired PasswordResetEmailCipher cipher;
+    @Autowired EmailActivationService activation;
+    @Autowired EmailActivationEmailPublisher publisher;
+    @Autowired EmailActivationEmailConsumer consumer;
+    @Autowired EmailActivationCipher cipher;
     @Autowired RabbitTemplate rabbit;
-    @Autowired SimpleRabbitListenerContainerFactory passwordResetEmailListenerFactory;
+    @Autowired SimpleRabbitListenerContainerFactory emailActivationEmailListenerFactory;
     @MockitoBean JavaMailSender mail;
     SimpleMessageListenerContainer first, second;
     RabbitAdmin admin;
@@ -70,9 +70,9 @@ class PasswordResetEmailRabbitIntegrationTest {
     @BeforeEach void setup() {
         admin = new RabbitAdmin(rabbit.getConnectionFactory()); admin.initialize();
         admin.purgeQueue(queue); admin.purgeQueue(queue + ".dead");
-        jdbc.update("DELETE FROM password_reset_emails"); jdbc.update("DELETE FROM password_reset_tokens");
-        email = "queued-reset-" + UUID.randomUUID() + "@example.com";
-        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Queue workspace", email, "test-password-123"));
+        jdbc.update("DELETE FROM email_activation_emails"); jdbc.update("DELETE FROM email_activation_tokens");
+        email = "queued-activation-" + UUID.randomUUID() + "@example.com";
+        newPending(email);
         when(mail.createMimeMessage()).thenAnswer(invocation -> new MimeMessage(Session.getInstance(new Properties())));
     }
     @AfterEach void cleanup() {
@@ -83,26 +83,32 @@ class PasswordResetEmailRabbitIntegrationTest {
         jdbc.execute("DROP SCHEMA " + schema + " CASCADE");
     }
 
+    void newPending(String account) {
+        accounts.register(new WorkspaceAccounts.Signup("Queue workspace", account, "test-password-123"));
+        // Start without a challenge to exercise durable resend acceptance.
+        jdbc.update("DELETE FROM email_activation_emails WHERE email=?", account);
+        jdbc.update("DELETE FROM email_activation_tokens WHERE email=?", account);
+    }
     UUID request(String account) {
-        passwords.forgot(account);
+        activation.resend(account);
         return jdbc.queryForObject("""
-                SELECT e.id FROM password_reset_emails e JOIN password_reset_tokens t
+                SELECT e.id FROM email_activation_emails e JOIN email_activation_tokens t
                     ON t.email=e.email AND t.token_hash=e.token_hash WHERE e.email=?
                 """, UUID.class, account);
     }
     String token(UUID id) {
-        var row = jdbc.queryForMap("SELECT * FROM password_reset_emails WHERE id=?", id);
+        var row = jdbc.queryForMap("SELECT * FROM email_activation_emails WHERE id=?", id);
         return cipher.decrypt((String) row.get("encrypted_token"), id, (String) row.get("email"),
                 (String) row.get("token_hash"), ((Timestamp) row.get("expires_at")).toInstant());
     }
-    int remaining() { return jdbc.queryForObject("SELECT count(*) FROM password_reset_emails", Integer.class); }
+    int remaining() { return jdbc.queryForObject("SELECT count(*) FROM email_activation_emails", Integer.class); }
     void await(BooleanSupplier condition) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
         while (System.nanoTime() < deadline) { if (condition.getAsBoolean()) return; Thread.sleep(50); }
-        fail("Timed out waiting for reset email queue state");
+        fail("Timed out waiting for activation email queue state");
     }
     SimpleMessageListenerContainer startConsumer() {
-        var container = passwordResetEmailListenerFactory.createListenerContainer();
+        var container = emailActivationEmailListenerFactory.createListenerContainer();
         container.setQueueNames(queue); container.setMessageListener((org.springframework.amqp.core.MessageListener) consumer::receive);
         container.start(); return container;
     }
@@ -115,17 +121,18 @@ class PasswordResetEmailRabbitIntegrationTest {
     @Test void requestCommitsEncryptedOutboxAndBrokerContainsOnlyPersistentReceiptId() throws Exception {
         UUID id = request(email); String token = token(id);
         verifyNoInteractions(mail);
-        assertFalse(jdbc.queryForObject("SELECT encrypted_token FROM password_reset_emails WHERE id=?", String.class, id).contains(token));
+        assertFalse(jdbc.queryForObject("SELECT encrypted_token FROM email_activation_emails WHERE id=?", String.class, id).contains(token));
         publisher.processPending();
         Message message = rabbit.receive(queue, 1000);
         assertNotNull(message);
         assertEquals(id.toString(), new String(message.getBody(), StandardCharsets.US_ASCII));
         assertEquals(org.springframework.amqp.core.MessageDeliveryMode.PERSISTENT, message.getMessageProperties().getReceivedDeliveryMode());
-        assertNotNull(jdbc.queryForObject("SELECT published_at FROM password_reset_emails WHERE id=?", Timestamp.class, id));
+        assertNotNull(jdbc.queryForObject("SELECT published_at FROM email_activation_emails WHERE id=?", Timestamp.class, id));
         consumer.receive(message);
         assertEquals(0, remaining());
-        passwords.reset(token, "new-password-1234", PasswordChangeContext.unknown());
-        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM password_reset_history WHERE email=?", Integer.class, email));
+        activation.activate(token);
+        assertTrue(accounts.loadUserByUsername(email).isEnabled());
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM password_reset_history WHERE email=?", Integer.class, email));
     }
 
     @Test void blockedSmtpDoesNotHoldAccountOrReceiptLocksAndOldCompletionCannotDeleteNewMail() throws Exception {
@@ -142,12 +149,12 @@ class PasswordResetEmailRabbitIntegrationTest {
             var delivery = pool.submit(() -> consumer.receive(new Message(oldId.toString().getBytes(StandardCharsets.US_ASCII), new MessageProperties())));
             assertTrue(sending.await(5, TimeUnit.SECONDS));
             try {
-                jdbc.update("UPDATE password_reset_tokens SET requested_at=clock_timestamp()-interval '61 seconds' WHERE email=?", email);
+                jdbc.update("UPDATE email_activation_tokens SET requested_at=clock_timestamp()-interval '61 seconds' WHERE email=?", email);
                 UUID newer = pool.submit(() -> request(email)).get(3, TimeUnit.SECONDS);
                 assertNotEquals(oldId, newer);
-                assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> passwords.reset(oldToken, "new-password-1234", PasswordChangeContext.unknown()));
+                assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> activation.activate(oldToken));
                 release.countDown(); delivery.get(5, TimeUnit.SECONDS);
-                assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM password_reset_emails WHERE id=?", Integer.class, newer));
+                assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM email_activation_emails WHERE id=?", Integer.class, newer));
                 assertNotNull(token(newer));
             } finally { release.countDown(); }
         }
@@ -155,14 +162,14 @@ class PasswordResetEmailRabbitIntegrationTest {
 
     @Test void expiredReplacedAndConsumedTokensAreDiscardedWithoutEmail() {
         UUID old = request(email);
-        jdbc.update("UPDATE password_reset_tokens SET requested_at=clock_timestamp()-interval '61 seconds' WHERE email=?", email);
+        jdbc.update("UPDATE email_activation_tokens SET requested_at=clock_timestamp()-interval '61 seconds' WHERE email=?", email);
         UUID current = request(email);
         consumer.receive(new Message(old.toString().getBytes(StandardCharsets.US_ASCII), new MessageProperties()));
         assertEquals(1, remaining());
-        jdbc.update("UPDATE password_reset_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE email=?", email);
+        jdbc.update("UPDATE email_activation_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE email=?", email);
         publisher.processPending(); assertEquals(0, remaining());
-        jdbc.update("UPDATE password_reset_tokens SET requested_at=clock_timestamp()-interval '61 seconds' WHERE email=?", email);
-        current = request(email); passwords.reset(token(current), "new-password-1234", PasswordChangeContext.unknown());
+        jdbc.update("UPDATE email_activation_tokens SET requested_at=clock_timestamp()-interval '61 seconds' WHERE email=?", email);
+        current = request(email); activation.activate(token(current));
         consumer.receive(new Message(current.toString().getBytes(StandardCharsets.US_ASCII), new MessageProperties()));
         assertEquals(0, remaining()); verifyNoInteractions(mail);
     }
@@ -172,28 +179,28 @@ class PasswordResetEmailRabbitIntegrationTest {
         doAnswer(invocation -> { if (calls.incrementAndGet() == 1) throw new MailSendException("offline"); return null; })
                 .when(mail).send(any(MimeMessage.class));
         UUID id = request(email);
-        var expiry = jdbc.queryForObject("SELECT expires_at FROM password_reset_tokens WHERE email=?", Timestamp.class, email);
+        var expiry = jdbc.queryForObject("SELECT expires_at FROM email_activation_tokens WHERE email=?", Timestamp.class, email);
         first = startConsumer(); publisher.processPending();
-        await(() -> jdbc.queryForObject("SELECT attempts FROM password_reset_emails WHERE id=?", Integer.class, id) == 1);
-        jdbc.update("UPDATE password_reset_emails SET available_at=clock_timestamp()+interval '1 hour' WHERE id=?", id);
+        await(() -> jdbc.queryForObject("SELECT attempts FROM email_activation_emails WHERE id=?", Integer.class, id) == 1);
+        jdbc.update("UPDATE email_activation_emails SET available_at=clock_timestamp()+interval '1 hour' WHERE id=?", id);
         String other = "healthy-" + UUID.randomUUID() + "@example.com";
-        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Healthy", other, "test-password-123")); request(other);
+        newPending(other); request(other);
         publisher.processPending(); await(() -> remaining() == 1);
-        jdbc.update("UPDATE password_reset_emails SET available_at=clock_timestamp() WHERE id=?", id);
+        jdbc.update("UPDATE email_activation_emails SET available_at=clock_timestamp() WHERE id=?", id);
         publisher.processPending(); await(() -> remaining() == 0);
-        assertEquals(expiry, jdbc.queryForObject("SELECT expires_at FROM password_reset_tokens WHERE email=?", Timestamp.class, email));
+        assertEquals(expiry, jdbc.queryForObject("SELECT expires_at FROM email_activation_tokens WHERE email=?", Timestamp.class, email));
         assertEquals(3, calls.get());
     }
 
     @Test void exhaustedFailureParksThenExpiryRemovesEncryptedPayload() throws Exception {
         doThrow(new MailSendException("offline")).when(mail).send(any(MimeMessage.class));
         UUID id = request(email); first = startConsumer(); publisher.processPending();
-        await(() -> jdbc.queryForObject("SELECT attempts FROM password_reset_emails WHERE id=?", Integer.class, id) == 1);
-        jdbc.update("UPDATE password_reset_emails SET available_at=clock_timestamp() WHERE id=?", id);
+        await(() -> jdbc.queryForObject("SELECT attempts FROM email_activation_emails WHERE id=?", Integer.class, id) == 1);
+        jdbc.update("UPDATE email_activation_emails SET available_at=clock_timestamp() WHERE id=?", id);
         publisher.processPending();
-        await(() -> jdbc.queryForObject("SELECT failed_at IS NOT NULL FROM password_reset_emails WHERE id=?", Boolean.class, id));
+        await(() -> jdbc.queryForObject("SELECT failed_at IS NOT NULL FROM email_activation_emails WHERE id=?", Boolean.class, id));
         publisher.processPending(); verify(mail, times(2)).send(any(MimeMessage.class));
-        jdbc.update("UPDATE password_reset_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE email=?", email);
+        jdbc.update("UPDATE email_activation_tokens SET expires_at=clock_timestamp()-interval '1 second' WHERE email=?", email);
         publisher.processPending(); assertEquals(0, remaining());
     }
 
@@ -206,14 +213,32 @@ class PasswordResetEmailRabbitIntegrationTest {
 
     @Test void abandonedLeaseAndLostPublicationAreRecovered() throws Exception {
         UUID id = request(email);
-        jdbc.update("UPDATE password_reset_emails SET lease_id=?, lease_until=clock_timestamp()+interval '1 hour', published_at=clock_timestamp()-interval '10 minutes' WHERE id=?", UUID.randomUUID(), id);
+        jdbc.update("UPDATE email_activation_emails SET lease_id=?, lease_until=clock_timestamp()+interval '1 hour', published_at=clock_timestamp()-interval '10 minutes' WHERE id=?", UUID.randomUUID(), id);
         publisher.processPending(); assertNull(rabbit.receive(queue, 100));
-        jdbc.update("UPDATE password_reset_emails SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?", id);
+        jdbc.update("UPDATE email_activation_emails SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?", id);
         first = startConsumer(); publisher.processPending(); await(() -> remaining() == 0);
         verify(mail, times(1)).send(any(MimeMessage.class));
     }
 
-    @Test void saturatedBrokerLeavesAcceptedRecoveryInDatabase() throws Exception {
+    @Test void twoConsumersDeliverSequentiallyOutsideTransactions() throws Exception {
+        AtomicInteger active = new AtomicInteger(), max = new AtomicInteger(), calls = new AtomicInteger();
+        doAnswer(invocation -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            int current = active.incrementAndGet(); max.accumulateAndGet(current, Math::max);
+            try { Thread.sleep(50); calls.incrementAndGet(); }
+            finally { active.decrementAndGet(); }
+            return null;
+        }).when(mail).send(any(MimeMessage.class));
+        for (int i = 0; i < 4; i++) {
+            String account = "sequential-" + UUID.randomUUID() + "@example.com";
+            newPending(account); request(account);
+        }
+        first = startConsumer(); second = startConsumer(); publisher.processPending();
+        await(() -> remaining() == 0);
+        assertEquals(1, max.get()); assertEquals(4, calls.get());
+    }
+
+    @Test void saturatedBrokerLeavesAcceptedActivationInDatabase() throws Exception {
         boolean rejected = false;
         for (int i = 0; i < 100; i++) {
             var correlation = new CorrelationData();
@@ -222,7 +247,7 @@ class PasswordResetEmailRabbitIntegrationTest {
         }
         assertTrue(rejected);
         UUID id = request(email); publisher.processPending();
-        assertNull(jdbc.queryForObject("SELECT published_at FROM password_reset_emails WHERE id=?", Timestamp.class, id));
+        assertNull(jdbc.queryForObject("SELECT published_at FROM email_activation_emails WHERE id=?", Timestamp.class, id));
         verifyNoInteractions(mail);
         while (rabbit.receive(queue, 100) != null) { /* Drain only synthetic receipt IDs. */ }
         first = startConsumer(); publisher.processPending(); await(() -> remaining() == 0);

@@ -38,7 +38,7 @@ class GoogleDriveIntegrationTest {
     long book;
     @BeforeEach void setup() {
         String email = "drive-" + UUID.randomUUID() + "@example.com";
-        accounts.register(new WorkspaceAccounts.Signup("Drive", email, "test-password-123"));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Drive", email, "test-password-123"));
         user = (WorkspacePrincipal) accounts.loadUserByUsername(email); authenticate();
         book = jdbc.queryForObject("INSERT INTO books (workspace_id, title, author, publication_date) VALUES (?, 'Drive', 'Author', '2026') RETURNING id",
                 Long.class, WorkspacePrincipal.currentWorkspace());
@@ -141,7 +141,7 @@ class GoogleDriveIntegrationTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
         authenticate(); UUID id = UUID.randomUUID(); imports.start(book, id, "selected-file");
         String email = "other-" + UUID.randomUUID() + "@example.com";
-        accounts.register(new WorkspaceAccounts.Signup("Other workspace", email, "test-password-123"));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Other workspace", email, "test-password-123"));
         var other = accounts.loadUserByUsername(email);
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/books/" + book + "/document/imports/" + id)
                         .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user(other)))

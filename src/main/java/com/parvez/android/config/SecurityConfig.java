@@ -44,7 +44,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, SWAGGER_WHITELIST).permitAll()
 
                         // These public routes authenticate through credentials, a refresh/reset token, or bound OAuth state.
-                        .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/forgot-password", "/api/auth/reset-password").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout", "/api/auth/forgot-password", "/api/auth/reset-password", "/api/auth/activate", "/api/auth/resend-activation").permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health", "/api/integrations/google-drive/callback", "/password-reset-token").permitAll()
                         .requestMatchers("/api/admin/public-book-requests/**", "/api/admin/public-book-requests").hasRole("SUPER_ADMIN")
                         .requestMatchers("/api/admin/login-history", "/api/admin/password-change-history").hasRole("SUPER_ADMIN")

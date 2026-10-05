@@ -57,7 +57,7 @@ class BookReadingIntegrationTest {
     }
     private WorkspacePrincipal signup() {
         String email = "pdf-" + UUID.randomUUID() + "@example.com";
-        accounts.register(new WorkspaceAccounts.Signup("Reading test", email, "test-password-123"));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Reading test", email, "test-password-123"));
         return (WorkspacePrincipal) accounts.loadUserByUsername(email);
     }
     private void authenticate(WorkspacePrincipal principal) {

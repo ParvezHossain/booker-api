@@ -116,6 +116,15 @@ and ordinary Basic/Bearer requests do not count as logins. History APIs authoriz
 accounts see only their authenticated workspace; only Super Admin may read/filter
 all workspaces. Preserve bounded cursor pages, explicit secret-free DTOs and no-store.
 
+New public workspace owners require email activation. Signup must atomically commit
+pending account/workspace, activation digest and encrypted outbox, with no network
+I/O on the request thread. Active status must gate login, Basic, Bearer and refresh;
+password recovery must not activate pending accounts. Activation/resend serialize
+on the existing account lock, use post-lock time, preserve single-use/current-token
+and generic resend semantics, and never return/log raw tokens. Keep the separate
+stable activation key, original expiry, bounded opaque-ID queue and fenced SMTP
+leases. Preserve older account/session access during the V20 upgrade.
+
 ## Database and configuration
 
 Any schema change needs a new Flyway migration in

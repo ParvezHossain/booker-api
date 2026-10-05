@@ -71,6 +71,7 @@ public class TokenService {
             throw unauthorized();
         }
         if (!passwords.matches(password, user.getPassword())) throw unauthorized();
+        if (!user.isEnabled()) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Email activation is required");
         var tokens = issue(user.getUsername());
         loginAudit.record(user.getUsername(), context);
         return tokens;
@@ -107,6 +108,7 @@ public class TokenService {
     public UsernamePasswordAuthenticationToken authentication(Jwt jwt) {
         try {
             var user = accounts.loadUserByUsername(jwt.getSubject());
+            if (!user.isEnabled()) throw new org.springframework.security.authentication.DisabledException("Account is not active");
             return UsernamePasswordAuthenticationToken.authenticated(user, null, user.getAuthorities());
         } catch (AuthenticationException ex) {
             throw new org.springframework.security.oauth2.server.resource.InvalidBearerTokenException("Invalid account");
@@ -147,7 +149,7 @@ public class TokenService {
     }
 
     private long credentialVersion(String email) {
-        var versions = jdbc.queryForList("SELECT credential_version FROM workspace_users WHERE email = ?", Long.class, email);
+        var versions = jdbc.queryForList("SELECT credential_version FROM workspace_users WHERE email = ? AND email_verified", Long.class, email);
         if (versions.isEmpty()) throw new BadJwtException("Invalid account");
         return versions.getFirst();
     }

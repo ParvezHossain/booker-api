@@ -39,7 +39,7 @@ job dashboards or production alerting. The LGTM Compose service is local tooling
 
 | Area | Main boundary |
 | --- | --- |
-| Signup/workspace | `WorkspaceController` is the HTTP adapter; `WorkspaceAccounts` provisions/loads principals |
+| Signup/workspace | `WorkspaceController` is the HTTP adapter; `WorkspaceAccounts` creates pending owners; `EmailActivationService` atomically issues/consumes email challenges; principals enforce active status |
 | Sessions | `TokenService` issues/rotates tokens, checks database credential versions and atomically records successful login context |
 | Security history | `AuthHistoryService` authorizes workspace/Super Admin cursor reads before lookup and returns explicit no-store DTO pages |
 | Passwords | `PasswordService` manages tokens/revocation and configurable monthly successful-reset allowance; `PasswordResetDelivery` persists encrypted recovery receipts; SMTP runs in a leased background worker |
@@ -68,6 +68,7 @@ bearer secrets and digests; passwords use salted PBKDF2 instead of SHA-256.
 | `reading_progress`, operations | Account/book primary key; account/operation retry identity; document/book foreign keys |
 | `public_reading_progress`, operations | Workspace/book primary key and workspace/operation retry identity |
 | `refresh_tokens`, `password_reset_tokens` | Hashed secrets with expiry; reset row unique per account; account credential version invalidates JWTs |
+| `email_activation_tokens`, `email_activation_emails` | Account-bound single-use activation digest and encrypted outbox; one-day configurable expiry, generic resend, dedicated bounded queue and fenced SMTP leases |
 | `password_reset_emails` | AES-GCM protected short-lived tokens, opaque receipt IDs, confirmed publication, retry/expiry and fenced lease finalization |
 | `login_history`, `password_change_history` | Account/workspace/time/IP/browser/device/User-Agent audit; indexed cursor reads; workspace scope and Super Admin global access |
 | `password_change_emails` | Leased confirmation outbox whose completed receipt deletion preserves audit |
@@ -86,6 +87,9 @@ schema reorganization.
 
 ## Transaction and concurrency invariants
 
+- Signup creates an unverified owner; activation/resend serialize on the account row,
+  commit digest/outbox/verification atomically and never hold locks across SMTP.
+  Existing accounts retain access during V20. Basic/Bearer/login/refresh enforce active status.
 - Login/refresh/password mutations lock the same account row. Password replacement
   increments credential version and removes reset/refresh sessions transactionally.
 - Recovery reads post-lock database time and READ COMMITTED history, enforcing the
@@ -161,7 +165,7 @@ Prioritized requirements and acceptance tests are in [PROMPTS.md](../PROMPTS.md)
 
 ## Verification expectations
 
-`OpenApiCoverageTest` checks all 47 business operations, generated success/error
+`OpenApiCoverageTest` checks all 49 business operations, generated success/error
 schemas, auth visibility, PDF Range/binary/HEAD and both progress 409 shapes. It also
 compares `API.md`'s inventory with registered application routes and public health.
 The fixed `/tmp` OpenAPI export is removed from test execution; clients can download

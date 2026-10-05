@@ -53,7 +53,7 @@ class OpenApiCoverageTest {
                     assertFalse(operation.path("responses").isEmpty(), method + " " + path);
                     if (path.startsWith("/api/")) {
                         boolean publicRoute = List.of("/api/auth/signup", "/api/auth/login", "/api/auth/refresh", "/api/auth/logout",
-                                "/api/auth/forgot-password", "/api/auth/reset-password", "/api/integrations/google-drive/callback").contains(path);
+                                "/api/auth/forgot-password", "/api/auth/reset-password", "/api/auth/activate", "/api/auth/resend-activation", "/api/integrations/google-drive/callback").contains(path);
                         assertEquals(publicRoute, operation.path("security").isEmpty(), "Authentication docs: " + method + " " + path);
                         assertTrue(List.of("200", "201", "202", "204", "206").stream()
                                 .anyMatch(operation.path("responses")::has), "Success response missing: " + method + " " + path);
@@ -62,7 +62,7 @@ class OpenApiCoverageTest {
                 }
             }
         }
-        assertEquals(47, operations, "Update the client inventory when adding an API");
+        assertEquals(49, operations, "Update the client inventory when adding an API");
     }
 
     @Test void markdownInventoryMatchesApplicationRoutesAndHealth() throws Exception {
@@ -94,7 +94,7 @@ class OpenApiCoverageTest {
         assertFalse(health.path("summary").asText().isBlank());
         assertTrue(health.path("security").isEmpty());
         assertTrue(health.path("responses").has("503"));
-        for (String path : List.of("signup", "login", "refresh", "logout", "forgot-password", "reset-password")) {
+        for (String path : List.of("signup", "login", "refresh", "logout", "forgot-password", "reset-password", "activate", "resend-activation")) {
             assertTrue(specification.path("paths").path("/api/auth/" + path).path("post").path("security").isEmpty(), path);
         }
         var change = specification.path("paths").path("/api/auth/change-password").path("post");
@@ -107,6 +107,19 @@ class OpenApiCoverageTest {
         assertTrue(schemas.path("LoginRequest").path("properties").path("password").path("writeOnly").asBoolean());
         assertTrue(schemas.path("ChangePasswordRequest").path("properties").path("newPassword").path("writeOnly").asBoolean());
         assertTrue(schemas.path("ResetPasswordRequest").path("properties").path("token").path("writeOnly").asBoolean());
+    }
+
+    @Test void emailActivationDocumentsPendingSignupAndExplicitTokenRedemption() {
+        var paths = specification.path("paths");
+        assertTrue(paths.path("/api/auth/activate").path("post").path("responses").has("204"));
+        assertTrue(paths.path("/api/auth/resend-activation").path("post").path("responses").has("202"));
+        assertTrue(paths.path("/api/auth/login").path("post").path("responses").has("403"));
+        assertTrue(paths.path("/api/auth/signup").path("post").path("responses").has("503"));
+        var schemas = specification.path("components").path("schemas");
+        assertTrue(schemas.path("SignupResponse").path("properties").has("activationRequired"));
+        assertTrue(schemas.path("SignupResponse").path("properties").has("activationExpiresAt"));
+        assertTrue(schemas.path("EmailActivationRequest").path("properties").path("token").path("writeOnly").asBoolean());
+        assertTrue(paths.path("/api/auth/activate").path("post").path("responses").path("204").path("content").isEmpty());
     }
 
     @Test void securityHistoryDocumentsBoundedPagesAndAuthentication() {

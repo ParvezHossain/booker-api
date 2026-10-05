@@ -63,7 +63,7 @@ class RequestEmailRabbitIntegrationTest {
         admin.purgeQueue(queue);admin.purgeQueue(queue+".dead");
         jdbc.update("DELETE FROM public_request_emails");
         String suffix=UUID.randomUUID().toString();
-        accounts.register(new WorkspaceAccounts.Signup("Queue workspace", "reader-"+suffix+"@example.com", "test-password-123"));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Queue workspace", "reader-"+suffix+"@example.com", "test-password-123"));
         accounts.provisionSuperAdmin("admin@example.com", "test-password-123");
         var owner=(WorkspacePrincipal)accounts.loadUserByUsername("reader-"+suffix+"@example.com");
         SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(owner,owner.getPassword(),owner.getAuthorities()));
@@ -113,7 +113,7 @@ class RequestEmailRabbitIntegrationTest {
             // A peak can span workspaces; each workspace keeps its monthly quota.
             if(i==10 || i==20) {
                 String email="peak-"+UUID.randomUUID()+"@example.com";
-                accounts.register(new WorkspaceAccounts.Signup("Peak workspace",email,"test-password-123"));
+                com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Peak workspace",email,"test-password-123"));
                 var owner=(WorkspacePrincipal)accounts.loadUserByUsername(email);
                 SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(owner,owner.getPassword(),owner.getAuthorities()));
             }

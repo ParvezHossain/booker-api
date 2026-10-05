@@ -14,7 +14,10 @@ public class WorkspacePrincipal extends User {
         this(email, password, workspaceId, "OWNER");
     }
     public WorkspacePrincipal(String email, String password, UUID workspaceId, String role) {
-        super(email, password, List.of(new SimpleGrantedAuthority("ROLE_" + role)));
+        this(email, password, workspaceId, role, true);
+    }
+    public WorkspacePrincipal(String email, String password, UUID workspaceId, String role, boolean enabled) {
+        super(email, password, enabled, true, true, true, List.of(new SimpleGrantedAuthority("ROLE_" + role)));
         this.role = role;
         this.workspaceId = workspaceId;
     }

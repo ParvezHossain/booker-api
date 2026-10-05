@@ -27,7 +27,7 @@ separately.
 
 ## Capabilities
 
-- Workspace signup, JWT login/rotating refresh/logout, legacy Basic authentication,
+- Workspace signup with email activation, JWT login/rotating refresh/logout, legacy Basic authentication,
   password changes and emailed password recovery, with security confirmations and
   account/workspace audit history of IP and browser/device for successful logins and
   password changes. Workspace accounts can page through their own history; Super Admin
@@ -89,7 +89,7 @@ and an exposed JobRunr dashboard are not established by that dependency.
 
 ```text
 src/main/java/com/parvez/android/   Controllers, services and feature packages
-src/main/resources/                Environment-backed properties and Flyway V1–V19
+src/main/resources/                Environment-backed properties and Flyway V1–V20
 src/test/java/                     Unit, MVC, database and real HTTP tests
 .mvn/wrapper/                      Maven wrapper distribution configuration
 .github/workflows/                 Build, test and Docker validation
@@ -220,6 +220,8 @@ through exported variables or your deployment secret manager.
 | `PASSWORD_CHANGE_EMAIL_FROM`, `PASSWORD_CHANGE_EMAIL_ENABLED` | Confirmation sender (blank falls back to PASSWORD_RESET_FROM); true enables a separate durable queue |
 | `PASSWORD_RESET_MONTHLY_LIMIT` | 3 successful resets per account per UTC calendar month; positive integer |
 | `PASSWORD_RESET_EMAIL_ENCRYPTION_KEY`, `PASSWORD_RESET_EMAIL_ENABLED` | Dedicated stable 32-byte Base64 key; true enables background RabbitMQ delivery |
+| `EMAIL_ACTIVATION_TTL`, `EMAIL_ACTIVATION_EMAIL_ENCRYPTION_KEY` | `PT24H` default activation lifetime; separate stable 32-byte Base64 key required for signup/resend |
+| `EMAIL_ACTIVATION_FROM`, `EMAIL_ACTIVATION_EMAIL_ENABLED` | Sender falls back to PASSWORD_RESET_FROM; true enables dedicated activation delivery |
 | `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source defaults to `http://localhost:4318/v1/metrics`; Compose sets an empty value |
 
 Drive credentials, Picker configuration, remaining SMTP options and worker settings
@@ -237,11 +239,11 @@ consumed by Compose, not automatically by Maven or the packaged application.
 
 - Interactive documentation: `http://localhost:8080/swagger-ui/index.html`.
 - OpenAPI JSON: `http://localhost:8080/v3/api-docs`.
-- Complete contracts and examples: [API.md](API.md), covering 47 business operations,
+- Complete contracts and examples: [API.md](API.md), covering 49 business operations,
   public health and the denied legacy root mapping.
 
-Create an account with `POST /api/auth/signup`, then log in with
-`POST /api/auth/login`. Use the returned access token in
+Create an account with `POST /api/auth/signup`, redeem the emailed token with
+`POST /api/auth/activate`, then log in with `POST /api/auth/login`. Use the returned access token in
 `Authorization: Bearer <accessToken>`. Refresh rotates both tokens; password
 change/reset invalidates previous account tokens. Signup does not issue tokens.
 The FREE workspace book limit defaults to 100; PRO entitlements are administered
@@ -255,6 +257,11 @@ export API_BASE='http://localhost:8080'
 curl -i -X POST "$API_BASE/api/auth/signup" \
   -H 'Content-Type: application/json' \
   -d '{"workspaceName":"My Library","email":"owner@example.com","password":"replace-this-password"}'
+
+# Copy the activation token from your email; this request issues no session.
+curl -i -X POST "$API_BASE/api/auth/activate" \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"<activation-token-from-email>"}'
 
 curl -sS -X POST "$API_BASE/api/auth/login" \
   -H 'Content-Type: application/json' \
@@ -357,6 +364,14 @@ browser key is public and must have API/origin restrictions. Follow
 
 ### Email and password recovery
 
+New workspace owners must activate their email before authentication. Signup queues
+an encrypted token email with a configurable one-day default expiry; activation
+and generic resend APIs support manual entry or an optional HTTPS app link.
+Configure a separate stable `EMAIL_ACTIVATION_EMAIL_ENCRYPTION_KEY` plus SMTP/sender
+and RabbitMQ before using signup. Existing accounts retain access during V20.
+See [activation setup](docs/email-activation.md) and the
+[Gemini Android adaptation prompt](docs/android-email-activation-gemini.md).
+
 Successful credential logins are recorded in PostgreSQL with request context.
 Workspace accounts can read `/api/workspace/login-history` and
 `/api/workspace/password-change-history`; Super Admin uses the corresponding
@@ -421,8 +436,8 @@ are in [operations](docs/operations.md).
 
 ## Database and upgrades
 
-Flyway owns the V1–V19 migration sequence; Hibernate validates the resulting schema.
-The 23 application tables and their creation/change versions are listed in the
+Flyway owns the V1–V20 migration sequence; Hibernate validates the resulting schema.
+The 25 application tables and their creation/change versions are listed in the
 [table and migration map](docs/database-table-map.md).
 Tables cover workspaces/accounts, private/public books, immutable documents,
 scoped progress and retry receipts, refresh/reset secrets, successful-reset history, login history, password-change audit/confirmation receipts and encrypted recovery receipts, Drive connections/jobs,

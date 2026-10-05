@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
         "books.documents.max-size=128B", "books.documents.workspace-limit=128B", "books.documents.max-pages=1",
         "books.storage.directory=${java.io.tmpdir}/booker-public-http-tests", "books.storage.cleanup-poll-millis=3600000"})
 class PublicUploadHttpTest {
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @LocalServerPort int port;
     @Autowired WorkspaceAccounts accounts;
     @Autowired PublicBookService publicBooks;
@@ -36,7 +37,7 @@ class PublicUploadHttpTest {
         String adminEmail = "http-admin-" + suffix + "@example.com", ownerEmail = "http-owner-" + suffix + "@example.com";
         String password = "http-test-password-123";
         accounts.provisionSuperAdmin(adminEmail, password);
-        accounts.register(new WorkspaceAccounts.Signup("HTTP", ownerEmail, password));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("HTTP", ownerEmail, password));
         var admin = accounts.loadUserByUsername(adminEmail);
         var owner = accounts.loadUserByUsername(ownerEmail);
         SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(admin, null, admin.getAuthorities()));

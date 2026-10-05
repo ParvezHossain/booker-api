@@ -77,7 +77,7 @@ class PasswordChangeEmailRabbitIntegrationTest {
         admin.purgeQueue(queue); admin.purgeQueue(queue + ".dead");
         jdbc.update("DELETE FROM password_change_history");
         email = "changed-" + UUID.randomUUID() + "@example.com";
-        accounts.register(new WorkspaceAccounts.Signup("Changed workspace", email, old));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Changed workspace", email, old));
         when(mail.createMimeMessage()).thenAnswer(invocation -> new MimeMessage(Session.getInstance(new Properties())));
     }
     @AfterEach void cleanup() {

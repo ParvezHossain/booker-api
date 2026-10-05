@@ -33,8 +33,8 @@ class PublicLibraryRequestIntegrationTest {
     MockMvc mvc;
     @BeforeEach void setup() {
         String suffix = UUID.randomUUID().toString();
-        accounts.register(new WorkspaceAccounts.Signup("Requests", "request-"+suffix+"@example.com", "test-password-123"));
-        accounts.register(new WorkspaceAccounts.Signup("Other", "other-"+suffix+"@example.com", "test-password-123"));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Requests", "request-"+suffix+"@example.com", "test-password-123"));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Other", "other-"+suffix+"@example.com", "test-password-123"));
         accounts.provisionSuperAdmin("review-"+suffix+"@example.com", "test-password-123");
         owner = (WorkspacePrincipal) accounts.loadUserByUsername("request-"+suffix+"@example.com");
         other = (WorkspacePrincipal) accounts.loadUserByUsername("other-"+suffix+"@example.com");
@@ -182,7 +182,7 @@ class PublicLibraryRequestIntegrationTest {
     @Test void monthlyLimitIsSharedByWorkspaceAccountsAndIndependentOfPlanOrDecision() {
         var workspace=ownerWorkspace();
         String teammate="teammate-"+UUID.randomUUID()+"@example.com";
-        accounts.register(new WorkspaceAccounts.Signup("Unused teammate workspace",teammate,"test-password-123"));
+        com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Unused teammate workspace",teammate,"test-password-123"));
         jdbc.update("UPDATE workspace_users SET workspace_id=? WHERE email=?",workspace,teammate);
         var sameWorkspace=(WorkspacePrincipal)accounts.loadUserByUsername(teammate);
         for(int i=0;i<10;i++) {

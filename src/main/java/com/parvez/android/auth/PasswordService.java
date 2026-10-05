@@ -59,7 +59,7 @@ public class PasswordService {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Password reset email is not configured");
         }
         String email = input.strip().toLowerCase(Locale.ROOT);
-        var users = jdbc.queryForList("SELECT email FROM workspace_users WHERE email = ? FOR UPDATE", String.class, email);
+        var users = jdbc.queryForList("SELECT email FROM workspace_users WHERE email = ? AND email_verified FOR UPDATE", String.class, email);
         if (users.isEmpty()) return;
         // Preserve the generic public response without issuing unusable recovery emails.
         if (monthlyUsage(email).used() >= monthlyLimit) return;
@@ -84,7 +84,7 @@ public class PasswordService {
         if (users.isEmpty()) throw invalidToken();
         String email = users.getFirst();
         // Same lock order as login, refresh, change and forgot, preventing token issuance races.
-        jdbc.queryForList("SELECT email FROM workspace_users WHERE email = ? FOR UPDATE", email);
+        if (jdbc.queryForList("SELECT email FROM workspace_users WHERE email = ? AND email_verified FOR UPDATE", email).isEmpty()) throw invalidToken();
         var usage = monthlyUsage(email);
         int consumed = jdbc.update("DELETE FROM password_reset_tokens WHERE email = ? AND token_hash = ? AND expires_at > ?",
                 email, digest, Timestamp.from(usage.checkedAt()));

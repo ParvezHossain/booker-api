@@ -24,8 +24,8 @@ class WorkspaceIsolationTest {
     @Autowired PasswordEncoder passwords;
     @AfterEach void clear() { SecurityContextHolder.clearContext(); }
     private UUID signup(String email) {
-        var result = accounts.register(new WorkspaceAccounts.Signup("Test workspace", email, "test-password-123"));
-        return (UUID) result.get("workspaceId");
+        var result = com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("Test workspace", email, "test-password-123"));
+        return (UUID) result.workspaceId();
     }
     private void login(String email) {
         var user = accounts.loadUserByUsername(email);
@@ -44,6 +44,10 @@ class WorkspaceIsolationTest {
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/auth/signup")
                 .contentType("application/json").content("{\"workspaceName\":\"Test\",\"email\":\"" + email + "\",\"password\":\"test-password-123\"}"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isCreated());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/workspace")
+                .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic(email, "test-password-123")))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isUnauthorized());
+        com.parvez.android.TestAccounts.activateFixture(jdbc, email);
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/workspace")
                 .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic(email, "test-password-123")))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());

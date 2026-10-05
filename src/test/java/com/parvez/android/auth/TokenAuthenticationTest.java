@@ -40,7 +40,7 @@ class TokenAuthenticationTest {
     @BeforeEach void setup() {
         mvc = webAppContextSetup(context).apply(springSecurity()).build();
         email = "jwt-" + UUID.randomUUID() + "@example.com";
-        workspace = (UUID) accounts.register(new WorkspaceAccounts.Signup("JWT test", email, "test-password-123")).get("workspaceId");
+        workspace = com.parvez.android.TestAccounts.registerVerified(accounts, jdbc, new WorkspaceAccounts.Signup("JWT test", email, "test-password-123")).workspaceId();
     }
 
     @Test void loginBearerWorkspaceAndValidation() throws Exception {

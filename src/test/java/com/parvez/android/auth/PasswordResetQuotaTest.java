@@ -33,6 +33,8 @@ class PasswordResetQuotaTest {
         Instant now = Instant.parse("2027-01-01T00:00:00Z");
         when(jdbc.queryForList("SELECT email FROM password_reset_tokens WHERE token_hash = ?", String.class, digest))
                 .thenReturn(List.of(email));
+        when(jdbc.queryForList("SELECT email FROM workspace_users WHERE email = ? AND email_verified FOR UPDATE", email))
+                .thenReturn(List.of(java.util.Map.of("email", email)));
         when(jdbc.queryForObject("SELECT clock_timestamp()", Timestamp.class)).thenReturn(Timestamp.from(now));
         when(jdbc.queryForObject(anyString(), eq(Integer.class), eq(email), any(Timestamp.class), any(Timestamp.class), eq(3)))
                 .thenReturn(2);
@@ -40,7 +42,7 @@ class PasswordResetQuotaTest {
                 email, digest, Timestamp.from(now))).thenReturn(1);
         new PasswordService(jdbc, encoder, mock(PasswordResetDelivery.class), mock(PasswordChangeNotifications.class), Duration.ofMinutes(30), 3).reset(token, "new-password-123", PasswordChangeContext.unknown());
         var ordered = inOrder(jdbc);
-        ordered.verify(jdbc).queryForList("SELECT email FROM workspace_users WHERE email = ? FOR UPDATE", email);
+        ordered.verify(jdbc).queryForList("SELECT email FROM workspace_users WHERE email = ? AND email_verified FOR UPDATE", email);
         ordered.verify(jdbc).queryForObject("SELECT clock_timestamp()", Timestamp.class);
         ordered.verify(jdbc).queryForObject(anyString(), eq(Integer.class), eq(email), eq(Timestamp.from(now)),
                 eq(Timestamp.from(Instant.parse("2027-02-01T00:00:00Z"))), eq(3));

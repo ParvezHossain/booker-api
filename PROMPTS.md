@@ -8,7 +8,7 @@ implemented. Priorities describe engineering sequencing, not committed release d
 
 ## Implemented baseline
 
-Workspace-isolated catalogues, JWT/Basic authentication, password management,
+Workspace-isolated catalogues, email-activated signup with encrypted durable activation mail, JWT/Basic authentication, password management,
 password-change security confirmations, successful-login context audit and paginated
 workspace/Super Admin security history APIs,
 immutable PDFs, local storage, authenticated ranges, revisioned reading progress,
