@@ -1,6 +1,8 @@
 package com.parvez.android.config;
 
 import jakarta.servlet.DispatcherType;
+import com.parvez.android.document.DocumentUploadFilter;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,6 +13,8 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.crypto.password.Pbkdf2PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
@@ -32,7 +36,10 @@ public class SecurityConfig {
 
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http, com.parvez.android.auth.TokenService tokens) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, com.parvez.android.auth.TokenService tokens,
+            @Qualifier("handlerExceptionResolver") HandlerExceptionResolver errors,
+            @Value("${books.documents.max-concurrent-uploads:4}") int maximumUploads,
+            @Value("${books.documents.upload-retry-seconds:5}") int retrySeconds) throws Exception {
         return http
                 .cors(Customizer.withDefaults())
                 .csrf(csrf -> csrf.disable())
@@ -65,6 +72,7 @@ public class SecurityConfig {
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt
                         .decoder(tokens::decodeAccess)
                         .jwtAuthenticationConverter(tokens::authentication)))
+                .addFilterAfter(new DocumentUploadFilter(maximumUploads, retrySeconds, errors), AuthorizationFilter.class)
                 .build();
     }
 

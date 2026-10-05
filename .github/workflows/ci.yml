@@ -46,9 +46,12 @@ jobs:
       DATABASE_URL: jdbc:postgresql://localhost:5432/booker_test
       DATABASE_USERNAME: booker_test
       DATABASE_PASSWORD: ci-only-password
+      # Cached Spring test contexts each own a pool; leave connections for direct JDBC concurrency checks.
+      DATABASE_POOL_SIZE: '4'
       BOOK_EVENTS_TEST_JDBC_URL: jdbc:postgresql://localhost:5432/booker_test?user=booker_test&password=ci-only-password
       BOOK_STORAGE_DIRECTORY: ${{ runner.temp }}/booker-ci-files
       MANAGEMENT_OTLP_METRICS_EXPORT_URL: ''
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: 'false'
       BOOK_REQUEST_EMAIL_ENABLED: 'false'
       PASSWORD_RESET_EMAIL_ENABLED: 'false'
       PASSWORD_CHANGE_EMAIL_ENABLED: 'false'

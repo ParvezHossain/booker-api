@@ -1,0 +1,13 @@
+# Starting resource budget for a 2 GiB / 2-core host; validate with actual PDFs and traffic.
+# docker compose -f compose.yaml -f compose.small-server.yaml up -d --build
+services:
+  app:
+    mem_limit: 896m
+    environment:
+      JAVA_TOOL_OPTIONS: '-Xms128m -Xmx512m -XX:+ExitOnOutOfMemoryError'
+      BOOK_MAX_CONCURRENT_UPLOADS: 2
+      BOOK_MAX_CONCURRENT_PARSERS: 1
+      DATABASE_POOL_SIZE: 8
+  postgres:
+    mem_limit: 256m
+    command: ['postgres', '-c', 'shared_buffers=64MB', '-c', 'work_mem=2MB', '-c', 'max_connections=30']

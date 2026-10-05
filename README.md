@@ -138,8 +138,11 @@ docker compose stop
 docker compose down
 ```
 
-The default API port is 8080. Compose starts PostgreSQL, RabbitMQ, the backend and a local
-Grafana/OTel development stack. Database, broker and PDF data persist in separate
+The default API port is 8080. Compose starts PostgreSQL, RabbitMQ and the backend.
+Add `--profile observability` to start the optional local Grafana/OTel stack.
+For a 2 GiB / 2-core host, use `docker compose -f compose.yaml -f compose.small-server.yaml up -d --build`;
+see [PDF capacity and resource budgets](docs/operations.md#pdf-traffic-and-small-server-deployment).
+Database, broker and PDF data persist in separate
 named volumes. `docker compose down` preserves them; `docker compose down -v` deletes
 all three data volumes. Compose is a development baseline; use the production controls described
 in [operations](docs/operations.md).
@@ -191,8 +194,8 @@ java -jar target/android-0.0.1-SNAPSHOT.jar
 
 This packaging command skips tests; run the verification lifecycle below before
 releasing a build. Stop the Compose `app` service before running a source instance
-on the same port. Grafana is available at `http://localhost:3000` when the full
-Compose stack is running.
+on the same port. Grafana is available at `http://localhost:3000` when the
+`observability` Compose profile is running.
 
 ## Environment configuration
 

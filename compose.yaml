@@ -46,6 +46,7 @@ services:
       retries: 12
 
   lgtm:
+    profiles: ['observability']
     image: grafana/otel-lgtm:latest
     ports:
       - '127.0.0.1:3000:3000' # Grafana Dashboard (local development)
@@ -135,6 +136,12 @@ services:
       GOOGLE_DRIVE_PICKER_API_KEY: ${GOOGLE_DRIVE_PICKER_API_KEY:-}
       GOOGLE_DRIVE_PROJECT_NUMBER: ${GOOGLE_DRIVE_PROJECT_NUMBER:-}
       BOOK_MAX_PAGES: ${BOOK_MAX_PAGES:-20000}
+      BOOK_MAX_CONCURRENT_UPLOADS: ${BOOK_MAX_CONCURRENT_UPLOADS:-4}
+      BOOK_UPLOAD_RETRY_SECONDS: ${BOOK_UPLOAD_RETRY_SECONDS:-5}
+      BOOK_MAX_CONCURRENT_PARSERS: ${BOOK_MAX_CONCURRENT_PARSERS:-2}
+      BOOK_PARSER_WAIT: ${BOOK_PARSER_WAIT:-PT5S}
+      SERVER_VIRTUAL_THREADS_ENABLED: ${SERVER_VIRTUAL_THREADS_ENABLED:-true}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
       BOOK_STORAGE_DIRECTORY: /app/data/books
       BOOK_MAX_FILE_SIZE: ${BOOK_MAX_FILE_SIZE:-200MB}
       BOOK_MAX_REQUEST_SIZE: ${BOOK_MAX_REQUEST_SIZE:-201MB}
@@ -142,7 +149,8 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:4200}
       SSE_MAX_CONNECTIONS: ${SSE_MAX_CONNECTIONS:-200}
       SSE_POLL_MILLIS: ${SSE_POLL_MILLIS:-1000}
-      MANAGEMENT_OTLP_METRICS_EXPORT_URL:
+      MANAGEMENT_OTLP_METRICS_EXPORT_URL: ${MANAGEMENT_OTLP_METRICS_EXPORT_URL:-}
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:-false}
     volumes:
       - book-files:/app/data
     depends_on:
@@ -150,8 +158,6 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      lgtm:
-        condition: service_started
 volumes:
   postgres-data:
   book-files:

@@ -10,16 +10,33 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.time.Duration;
 
 @Component
 public class PdfInspector {
-    private final Semaphore parsers = new Semaphore(2);
+    private final Semaphore parsers;
     private final int maxPages;
-    public PdfInspector(@Value("${books.documents.max-pages:20000}") int maxPages) { this.maxPages = maxPages; }
+    private final Duration wait;
+    public PdfInspector(@Value("${books.documents.max-pages:20000}") int maxPages,
+                        @Value("${books.documents.max-concurrent-parsers:2}") int maximumParsers,
+                        @Value("${books.documents.parser-wait:PT5S}") Duration wait) {
+        if (maxPages < 1 || maximumParsers < 1 || maximumParsers > 8
+                || wait.isNegative() || wait.compareTo(Duration.ofSeconds(30)) > 0)
+            throw new IllegalArgumentException("PDF page limit must be positive, parsers 1–8 and wait 0–30 seconds");
+        this.maxPages = maxPages;
+        this.parsers = new Semaphore(maximumParsers, true);
+        this.wait = wait;
+    }
     public int inspect(Resource resource) throws IOException { return inspect(resource, maxPages); }
     public int inspectPublic(Resource resource) throws IOException { return inspect(resource, Integer.MAX_VALUE); }
     private int inspect(Resource resource, int pageLimit) throws IOException {
-        if (!parsers.tryAcquire()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "PDF validation is busy; retry later");
+        try {
+            if (!parsers.tryAcquire(wait.toNanos(), TimeUnit.NANOSECONDS)) throw busy();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw busy();
+        }
         Path temporary = null;
         try {
             try (var input = resource.getInputStream()) {
@@ -50,6 +67,9 @@ public class PdfInspector {
             parsers.release();
             if (temporary != null) Files.deleteIfExists(temporary);
         }
+    }
+    private ResponseStatusException busy() {
+        return new PdfCapacityException("PDF validation is busy; retry later", 5);
     }
     private void rejectActiveContent(org.apache.pdfbox.cos.COSBase root) {
         // PDF objects can be cyclic; bound traversal and track identity rather than recursing.

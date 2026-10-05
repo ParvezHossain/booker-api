@@ -73,7 +73,7 @@ public class PublicLibraryRequestController {
     @ApiResponse(responseCode = "200", description = "Accepted request with public book ID", content = @Content(mediaType = "application/json", schema = @Schema(implementation = PublicLibraryBookRequest.class)))
     @ApiResponse(responseCode = "413", description = "Multipart upload limit exceeded", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @ApiResponse(responseCode = "415", description = "Invalid or unsafe PDF", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
-    @ApiResponse(responseCode = "503", description = "PDF storage unavailable", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "503", description = "PDF storage unavailable or upload/parser capacity busy (Retry-After)", headers = @io.swagger.v3.oas.annotations.headers.Header(name = "Retry-After", description = "Retry delay in seconds when capacity is busy", schema = @Schema(type = "integer")), content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @PostMapping(value = "/api/admin/public-book-requests/{requestId}/accept", consumes = "multipart/form-data")
     public PublicLibraryBookRequest accept(@PathVariable UUID requestId,
                                            @Schema(implementation = PublicLibraryRequestService.Metadata.class)

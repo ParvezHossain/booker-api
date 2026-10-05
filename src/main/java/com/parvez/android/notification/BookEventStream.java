@@ -26,6 +26,7 @@ public class BookEventStream {
     private final long pollMillis;
     private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
     private final Set<SseEmitter> connections = ConcurrentHashMap.newKeySet();
+    private volatile CursorSnapshot snapshot;
 
     public BookEventStream(BookEventStore store,
                            @Value("${books.notifications.max-connections:200}") int maxConnections,
@@ -85,8 +86,11 @@ public class BookEventStream {
             emitter.send(SseEmitter.event().name("ready").id(Long.toString(cursor))
                     .reconnectTime(3000).data("{}", MediaType.APPLICATION_JSON));
             long heartbeatAt = System.nanoTime();
+            long observedGlobalCursor = -1;
             while (!closed.get() && !Thread.currentThread().isInterrupted()) {
-                var events = store.after(cursor, workspaceId);
+                long globalCursor = pollingCursor();
+                var events = globalCursor != observedGlobalCursor
+                        ? store.after(cursor, workspaceId) : java.util.List.<BookEventStore.Event>of();
                 for (var event : events) {
                     if (closed.get()) return;
                     emitter.send(SseEmitter.event().name(event.type()).id(Long.toString(event.id()))
@@ -97,7 +101,10 @@ public class BookEventStream {
                     emitter.send(SseEmitter.event().comment("heartbeat"));
                     heartbeatAt = System.nanoTime();
                 }
-                if (events.size() < 100) Thread.sleep(pollMillis);
+                if (events.size() < 100) {
+                    observedGlobalCursor = globalCursor;
+                    Thread.sleep(pollMillis);
+                }
             }
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
@@ -111,6 +118,16 @@ public class BookEventStream {
             emitter.complete();
         }
     }
+
+    // One global check per polling interval, independent of the number of idle readers.
+    private synchronized long pollingCursor() {
+        long now = System.nanoTime();
+        if (snapshot == null || now - snapshot.checkedAt() >= java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(pollMillis))
+            snapshot = new CursorSnapshot(store.latestId(), now);
+        return snapshot.cursor();
+    }
+
+    private record CursorSnapshot(long cursor, long checkedAt) {}
 
     @PreDestroy
     void shutdown() {

@@ -38,7 +38,7 @@ public class BookDocumentController {
             @ApiResponse(responseCode = "403", description = "Workspace file storage budget exhausted", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class))),
             @ApiResponse(responseCode = "413", description = "File or multipart request exceeds configured limit", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class))),
             @ApiResponse(responseCode = "415", description = "Not a supported, safe PDF", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class))),
-            @ApiResponse(responseCode = "503", description = "PDF validator busy or storage unavailable", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))})
+            @ApiResponse(responseCode = "503", description = "Upload capacity or PDF validator busy (Retry-After), or storage unavailable", headers = @Header(name = "Retry-After", description = "Retry delay in seconds when capacity is busy", schema = @Schema(type = "integer")), content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))})
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<BookDocument.DocumentResponse> upload(@PathVariable long bookId,
             @RequestHeader("Idempotency-Key") UUID operation, @RequestPart("file") MultipartFile file) throws IOException {

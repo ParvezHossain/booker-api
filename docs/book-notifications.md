@@ -64,10 +64,14 @@ a broker/CDC design if write throughput becomes high.
 
 Each backend instance reads the shared event log, so reconnection can reach any
 instance without sticky sessions. Polling defaults to 1 second, in batches of 100
-per connection. Virtual threads isolate client writes, and admission is bounded
+per connection. Each instance shares one global cursor check per polling interval;
+idle streams query their workspace history only on initial replay or when the
+global cursor advances. Full replay batches drain immediately until caught up.
+Virtual threads isolate client writes, and admission is bounded
 to 200 streams per instance. Configure `books.notifications.poll-millis` and
-`books.notifications.max-connections` as needed. Database traffic scales with
-connected clients; this design targets modest fan-out. Configure proxy write/idle
+`books.notifications.max-connections` as needed. A global change triggers a scoped
+query for each connected client, so active fan-out still scales with connections.
+Configure proxy write/idle
 timeouts and disable response buffering/compression for this endpoint so slow
 clients cannot retain resources indefinitely. Nginx buffering is also disabled
 by the response header.

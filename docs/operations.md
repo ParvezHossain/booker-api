@@ -36,6 +36,12 @@ commit credentials in shared IDE configurations or add a fallback signing key.
 | `BOOK_MAX_REQUEST_SIZE` | `201MB`; servlet multipart request cap, including admin acceptance |
 | `BOOK_WORKSPACE_STORAGE_LIMIT` | `5GB`; all retained private document versions count |
 | `BOOK_MAX_PAGES` | 20000; private PDF page limit |
+| `BOOK_MAX_CONCURRENT_UPLOADS` | 4; 1–32 HTTP uploads per instance, including private multipart, public raw PDF and request acceptance; checked after security and before body parsing |
+| `BOOK_UPLOAD_RETRY_SECONDS` | 5; 1–300; Retry-After seconds for HTTP upload admission overflow |
+| `BOOK_MAX_CONCURRENT_PARSERS` | 2; 1–8; shared by HTTP uploads and Drive imports |
+| `BOOK_PARSER_WAIT` | `PT5S`; 0–30 seconds; bounded wait for a parser, then 503/Retry-After: 5; `PT0S` restores immediate rejection |
+| `SERVER_VIRTUAL_THREADS_ENABLED` | true; virtual request threads for I/O-bound PDF streaming; does not increase CPU or parser capacity |
+| `DATABASE_POOL_SIZE` | 10; Hikari maximum connections per instance; small-server override uses 8 |
 | `GOOGLE_DRIVE_ENABLED` | false; disabled unless OAuth is configured |
 | `GOOGLE_DRIVE_CLIENT_ID` | OAuth Web application client ID, required when enabled |
 | `GOOGLE_DRIVE_CLIENT_SECRET` | Backend-only OAuth secret, required when enabled |
@@ -80,8 +86,8 @@ commit credentials in shared IDE configurations or add a fallback signing key.
 | `RABBITMQ_VHOST`, `RABBITMQ_SSL_ENABLED` | `/` / false locally; use isolated vhosts and TLS in production |
 | `RABBITMQ_HEALTH_ENABLED` | true; broker health is independent of request/recovery delivery pause flags |
 | `BOOK_REQUEST_EMAIL_*` delivery limits | See [queue settings](request-email-queue.md#configuration) for batch, capacity, retry and recovery defaults |
-| `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source default `http://localhost:4318/v1/metrics`; Compose supplies empty value |
-| `MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED` | true; set false locally when no OTLP metrics collector is running |
+| `MANAGEMENT_OTLP_METRICS_EXPORT_URL` | Source default `http://localhost:4318/v1/metrics`; Compose defaults empty; with the observability profile use `http://lgtm:4318/v1/metrics` |
+| `MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED` | Source default true; Compose and `.env.example` default false; enable only with a configured collector |
 
 ISO-8601 durations are used for token lifetimes. Spring DataSize units are used
 for byte limits. Compose binds PostgreSQL, RabbitMQ AMQP/management and Grafana/OTLP ports to loopback;
@@ -278,6 +284,7 @@ ready, then export settings in the build terminal:
 ```sh
 export DATABASE_URL='jdbc:postgresql://localhost:55432/booker_test'
 export DATABASE_USERNAME='booker_test'
+export DATABASE_POOL_SIZE=4
 export DATABASE_PASSWORD="$BOOKER_TEST_PASSWORD"
 export JWT_SECRET="$(openssl rand -base64 32)"
 export BOOK_STORAGE_DIRECTORY="$(mktemp -d)"
@@ -295,7 +302,9 @@ export BOOK_EVENTS_TEST_JDBC_URL="${DATABASE_URL}?user=${DATABASE_USERNAME}&pass
 ./mvnw -B clean verify
 ```
 
-Use a URL-safe test password or encode it for the JDBC query URL. Spring tests use
+Cached Spring test contexts each own a connection pool. The four-connection test
+setting leaves room for direct JDBC concurrency checks and does not change the
+production default. Use a URL-safe test password or encode it for the JDBC query URL. Spring tests use
 the exported datasource; the low-level event test connects using its JDBC URL.
 Omitting `BOOK_EVENTS_TEST_JDBC_URL` skips that test. General Spring test contexts
 keep all three email queues disabled; `RequestEmailRabbitIntegrationTest`,
@@ -404,6 +413,77 @@ FREE/PRO are entitlements, not billing. Operators may set agreed limits directly
 UPDATE workspaces SET plan = 'PRO', book_limit = 10000
 WHERE id = 'replace-with-workspace-uuid';
 ```
+
+## PDF traffic and small-server deployment
+
+PDF reads return disk-backed resources with authorized Range/HEAD support; the
+backend does not render pages. Upload copies use 64 KiB buffers and multipart
+staging goes to disk. Authentication and route-role checks precede a shared HTTP
+upload gate, before MVC parses multipart or opens raw PDF request bodies. The
+default four slots cover private upload, public raw upload and request acceptance
+together, and are released on success, validation failure, rollback or disconnect.
+Other routes, including PDF reads, do not use these slots. Saturated uploads return
+503 ApiError with `Retry-After`, without starting storage/parsing. Clients should
+use bounded backoff with jitter, honor Retry-After and preserve the upload's
+Idempotency-Key. Tomcat defers `100 Continue` until a body read so clients using
+`Expect: 100-continue` can receive rejection without sending PDF bytes.
+
+Two fair parser permits are shared with Drive imports; admitted uploads wait up
+to five seconds for a permit, then fail with 503/Retry-After. Stored bytes are
+cleaned up on validation timeout/failure. Normal uploads parse outside database
+transactions; public request acceptance retains its existing outer transaction
+and rollback cleanup. HTTP admission does not queue unlimited request bodies,
+and does not impose private byte/page/storage quotas on public raw uploads.
+The gate is per instance, not a distributed quota or per-account rate limiter.
+
+For a **2 GiB / 2-core** server, start with:
+
+```sh
+docker compose -f compose.yaml -f compose.small-server.yaml config --quiet
+docker compose -f compose.yaml -f compose.small-server.yaml up -d --build
+```
+
+| Service | Container memory ceiling | Additional limits |
+| --- | --- | --- |
+| Backend | 896 MiB | 128 MiB initial / 512 MiB maximum Java heap; two HTTP uploads, one parser, eight database connections |
+| PostgreSQL | 256 MiB | 64 MiB shared buffers, 2 MiB work_mem per operation, 30 connections |
+| RabbitMQ | 512 MiB | Existing 256 MiB broker alarm and bounded persistent queues |
+
+These ceilings total 1664 MiB, leaving roughly 384 MiB on a 2 GiB host for Ubuntu
+and other processes. Heap is only part of JVM memory; thread stacks, direct
+buffers, metaspace and filesystem cache also need room. PostgreSQL work_mem is
+per operation, not a total budget. This is a starting configuration, not a
+100-user capacity guarantee. The override fixes upload/parser/pool settings even
+when `.env` contains the regular defaults; edit an additional deployment override
+to change them. It deliberately preserves the existing 200 MB private file limit;
+operators can lower `BOOK_MAX_FILE_SIZE` and `BOOK_MAX_REQUEST_SIZE` together.
+
+Grafana/OTel now requires `--profile observability`; metrics export is also opt-in
+in Compose, avoiding background attempts to reach an unconfigured collector.
+Leave that profile off on the
+small server or run observability elsewhere. Existing running LGTM containers
+must be stopped explicitly when changing deployments. Build images in CI or on
+a separate machine so Maven compilation does not compete with live traffic.
+
+Use SSD storage and provision temporary disk for multipart staging plus storage
+copies, retained versions and PostgreSQL. A proxy may buffer complete uploads
+before the backend gate: configure its own body/concurrency limits and, where
+appropriate, disable request buffering for upload routes. Forward Range and
+Retry-After headers; retain authentication and authorization on every PDF read.
+Prefer Bearer tokens for repeated reads; legacy Basic still performs its password
+check on each request. Bound login/authentication traffic at the trusted gateway.
+
+Idle SSE connections share one global database cursor check per poll interval;
+workspace-scoped history queries run on initial replay and when events advance.
+Active event fan-out and reading-progress writes still consume database capacity.
+
+Before rollout, load-test representative small, large, scanned and complex PDFs
+on the target server. Include 100 concurrent range/full reads, slow clients,
+upload bursts, progress writes and SSE. Track p95 loading time, 503 responses,
+container RSS, GC pauses, CPU, disk latency/free space, network throughput and
+database pool waits. Confirm overload stays bounded and normal traffic recovers.
+The HTTP regression test exercises 100 small range reads during a blocked upload;
+it is a correctness check, not a benchmark of large PDFs or the production host.
 
 ## Deployment, storage and backups
 

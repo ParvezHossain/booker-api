@@ -136,6 +136,15 @@ Malformed JSON returns `Invalid request body`; missing/type-invalid parameters/h
 
 **Do not assume every error is ApiError.** Spring Security failures happen before controller advice and no custom JSON entry point/access-denied handler is configured. Their body is not fixed here; authentication challenge headers may be present. Range failures use framework behavior. HEAD responses have no body. Progress revision conflicts return a ReadingProgress object with HTTP 409; replaced-document/reused-operation conflicts return ApiError. Health errors return health objects. See each endpoint's errors plus these common rules. JSON-consuming endpoints may return 400/415 as described above; all controller operations may encounter the generic 500 handler.
 
+PDF upload capacity is checked after security authorization and before reading
+bodies on private upload, public raw upload and request acceptance. The shared
+per-instance gate defaults to four requests; overflow returns 503 ApiError with
+`Retry-After` seconds. An admitted upload waits at most five seconds for one of
+two shared PDF parsers before another 503/Retry-After. These deployment limits
+are configurable and add no private quotas to the public raw-upload contract.
+Retry with bounded backoff/jitter and the same Idempotency-Key where applicable.
+See [traffic and memory settings](docs/operations.md#pdf-traffic-and-small-server-deployment).
+
 ## 4. Response schemas
 
 Endpoint examples and field tables below reference these reusable schemas. Array responses contain objects of the named schema; no wrapper is added.
@@ -1448,7 +1457,7 @@ Content-Type: application/json
 | 404 | Private book not found in the authenticated workspace. |
 | 413 | File/multipart size limit exceeded. |
 | 415 | Invalid extension/MIME or unsafe, encrypted or invalid PDF. |
-| 503 | Storage unavailable or validator busy. |
+| 503 | Storage unavailable, or upload/validator capacity busy; capacity responses include Retry-After seconds. |
 
 **Business / implementation notes**
 
@@ -3322,7 +3331,7 @@ Content-Type: application/json
 | 403 | Super Admin role required; security-filter body is not fixed. |
 | 404 | Public book not found. |
 | 415 | Invalid extension or unsafe/invalid/encrypted PDF. |
-| 503 | Storage unavailable or validator busy. |
+| 503 | Storage unavailable, or upload/validator capacity busy; capacity responses include Retry-After seconds. |
 
 **Business / implementation notes**
 
@@ -3662,7 +3671,7 @@ Content-Type: application/json
 | 409 | Already reviewed or duplicate public book pair. |
 | 413 | Configured servlet multipart limit exceeded. |
 | 415 | File MIME/extension or PDF validation fails. |
-| 503 | Storage unavailable or validator busy. |
+| 503 | Storage unavailable, or upload/validator capacity busy; capacity responses include Retry-After seconds. |
 
 **Business / implementation notes**
 

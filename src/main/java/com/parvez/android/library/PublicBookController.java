@@ -77,7 +77,7 @@ public class PublicBookController {
     @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(mediaType = "application/pdf", schema = @Schema(type = "string", format = "binary")))
     @ApiResponse(responseCode = "201", description = "PDF stored or original retry result returned", content = @Content(mediaType = "application/json"))
     @ApiResponse(responseCode = "415", description = "Unsupported MIME, filename or unsafe/invalid/encrypted PDF", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
-    @ApiResponse(responseCode = "503", description = "Storage unavailable or parser busy", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
+    @ApiResponse(responseCode = "503", description = "Storage unavailable or upload/parser capacity busy (Retry-After)", headers = @Header(name = "Retry-After", description = "Retry delay in seconds when capacity is busy", schema = @Schema(type = "integer")), content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class)))
     @PostMapping(value = "/{bookId}/document", consumes = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<BookDocument.DocumentResponse> upload(@PathVariable long bookId,
             @RequestHeader("Idempotency-Key") UUID operation, @RequestParam String fileName, HttpServletRequest request) throws IOException {

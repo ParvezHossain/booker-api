@@ -339,8 +339,13 @@ Rotating it requires re-encrypting stored credentials or reconnecting Drive acco
 
 Multipart staging spills directly to disk. Stored files are copied in 64 KiB blocks;
 PDFBox reads from disk to parse page count. Serving uses Spring range resources.
-Allow sufficient temporary disk and proxy upload/body timeouts. Two parser permits
-limit concurrent parsing per instance; excess requests receive 503 for retry.
+Allow sufficient temporary disk and proxy upload/body timeouts. A shared HTTP
+admission gate defaults to four uploads per instance, after security but before
+multipart parsing or raw body reads. It covers private uploads, public uploads and
+request acceptance; overload returns 503 ApiError with Retry-After seconds.
+Two parser permits default to a bounded five-second wait; timeout returns 503 with
+Retry-After and cleans up staged storage. Parser concurrency/wait are configurable
+and also apply to Drive imports. See [resource budgets and traffic checks](operations.md#pdf-traffic-and-small-server-deployment).
 
 There is no S3 implementation yet. The storage interface supports a future provider,
 including ranged resources or signed URLs. Multiple local-storage replicas must

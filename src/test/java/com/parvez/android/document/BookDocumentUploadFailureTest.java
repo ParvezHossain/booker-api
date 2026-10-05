@@ -73,6 +73,18 @@ class BookDocumentUploadFailureTest {
         verify(repository, never()).activate(any(), anyString(), any());
     }
 
+    @Test void parserTimeoutRemovesStoredBytesWithoutChangingActiveDocument() throws Exception {
+        when(storage.upload(any(), anyLong())).thenReturn(new FileStorageService.StoredFile(key, 100, "checksum"));
+        var resource = new org.springframework.core.io.ByteArrayResource(new byte[100]);
+        when(storage.download(key)).thenReturn(resource);
+        when(inspector.inspect(resource)).thenThrow(new PdfCapacityException("PDF validation is busy; retry later", 5));
+        var failure = assertThrows(ResponseStatusException.class, this::upload);
+        assertEquals(503, failure.getStatusCode().value());
+        assertEquals("5", failure.getHeaders().getFirst("Retry-After"));
+        verify(storage).delete(key);
+        verify(repository, never()).activate(any(), anyString(), any());
+    }
+
     private BookDocument upload() throws IOException {
         return service.upload(1, UUID.randomUUID(), "book.pdf", "application/pdf",
                 new ByteArrayInputStream(new byte[100]), "UPLOAD");

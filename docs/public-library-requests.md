@@ -36,7 +36,7 @@ Malformed JSON, JSON null, missing publication date and oversized metadata field
 
 Title and author are taken from the original request; administrators provide the existing model's remaining metadata. Publication date is required, at most 20 characters. Description is at most 5000 characters. Request title/author are required, at most 255 characters, and stripped of surrounding whitespace.
 
-Errors: 400 invalid UUID, fields or multipart; 401 missing/invalid authentication; 403 missing workspace or Super Admin privilege; 404 missing request; 409 duplicate pending request, existing public book or already reviewed request; 429 workspace monthly submission quota exhausted (Retry-After header); 413 configured multipart limit; 415 invalid PDF/type/extension; 503 storage unavailable. Rejection of a missing request returns 404. Invalid admin status filters return 400.
+Errors: 400 invalid UUID, fields or multipart; 401 missing/invalid authentication; 403 missing workspace or Super Admin privilege; 404 missing request; 409 duplicate pending request, existing public book or already reviewed request; 429 workspace monthly submission quota exhausted (Retry-After header); 413 configured multipart limit; 415 invalid PDF/type/extension; 503 storage unavailable or upload/parser capacity busy (Retry-After seconds). Rejection of a missing request returns 404. Invalid admin status filters return 400.
 
 ## Monthly workspace request limit
 
